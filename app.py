@@ -12,6 +12,9 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, r2_score, confusion_matrix, classification_report
 import matplotlib.pyplot as plt
+from tableone import TableOne
+import statsmodels.stats.api as sms
+import statsmodels.api as sm
 
 # Configure Gemini API
 # In a real app, use st.secrets
@@ -58,34 +61,45 @@ st.set_page_config(
     layout="wide"
 )
 
-# Auto-load dataset for stress testing
-local_path = "/Users/ahmadtarek/Downloads/healthcare_dataset.csv"
-if 'df' not in st.session_state and os.path.exists(local_path):
-    try:
-        df = pd.read_csv(local_path)
-        # Clean data immediately
-        for col in df.select_dtypes(include=['object']).columns:
-            try:
-                df[col] = df[col].astype(str).str.title().str.strip()
-            except:
-                pass
-        for col in df.columns:
-            if 'date' in col.lower() or 'time' in col.lower() or 'admission' in col.lower() or 'discharge' in col.lower():
+# Robust Data Loading Function
+def load_data():
+    """Ensures data is loaded from session state or local file."""
+    if 'df' in st.session_state:
+        return st.session_state['df']
+    
+    local_path = "/Users/ahmadtarek/Downloads/healthcare_dataset.csv"
+    if os.path.exists(local_path):
+        try:
+            df = pd.read_csv(local_path)
+            # Clean data immediately
+            for col in df.select_dtypes(include=['object']).columns:
                 try:
-                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                    df[col] = df[col].astype(str).str.title().str.strip()
                 except:
                     pass
-        
-        st.session_state['df'] = df
-        st.session_state['filename'] = "healthcare_dataset.csv"
-        # Feature Engineering
-        adm_col = next((c for c in df.columns if 'admission' in c.lower() and 'date' in c.lower()), None)
-        dis_col = next((c for c in df.columns if 'discharge' in c.lower() and 'date' in c.lower()), None)
-        if adm_col and dis_col:
-            df['Length of Stay'] = (df[dis_col] - df[adm_col]).dt.days
+            for col in df.columns:
+                if 'date' in col.lower() or 'time' in col.lower() or 'admission' in col.lower() or 'discharge' in col.lower():
+                    try:
+                        df[col] = pd.to_datetime(df[col], errors='coerce')
+                    except:
+                        pass
             
-    except Exception as e:
-        st.error(f"Auto-load failed: {e}")
+            # Feature Engineering
+            adm_col = next((c for c in df.columns if 'admission' in c.lower() and 'date' in c.lower()), None)
+            dis_col = next((c for c in df.columns if 'discharge' in c.lower() and 'date' in c.lower()), None)
+            if adm_col and dis_col:
+                df['Length of Stay'] = (df[dis_col] - df[adm_col]).dt.days
+            
+            st.session_state['df'] = df
+            st.session_state['filename'] = "healthcare_dataset.csv"
+            return df
+        except Exception as e:
+            st.error(f"Auto-load failed: {e}")
+            return None
+    return None
+
+# Load data at startup
+df = load_data()
 
 # Sidebar for navigation
 st.sidebar.title("📊 Rbiostatitics")
@@ -93,7 +107,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("Navigation")
 page = st.sidebar.radio(
     "Select a page:",
-    ["Home", "Data Upload", "Analysis", "Statistical Tests", "Visualization", "Machine Learning", "AI Chatbot"]
+    ["Home", "Data Upload", "Table 1", "Statistical Wizard", "Statistical Tests", "Meta-Analysis", "Visualization", "Machine Learning", "AI Chatbot"]
 )
 st.sidebar.markdown("---")
 st.sidebar.info("Upload your data files (.csv or .xlsx) to get started!")
@@ -248,6 +262,112 @@ elif page == "Data Upload":
     else:
         st.info("👆 Please upload a file to get started")
 
+elif page == "Table 1":
+    st.title("📋 Table 1 Generator")
+    st.info("Automatically generate a 'Table 1' (Demographics) for your study.")
+    
+    df = load_data()
+    if df is not None:
+        st.success(f"Working with: **{st.session_state['filename']}**")
+        st.markdown("---")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            groupby_col = st.selectbox("Group By (e.g., Treatment Group)", [None] + list(df.columns))
+        with col2:
+            categorical_cols = list(df.select_dtypes(include=['object', 'category']).columns)
+            numeric_cols = list(df.select_dtypes(include=np.number).columns)
+            all_cols = categorical_cols + numeric_cols
+            selected_vars = st.multiselect("Select Variables to Include", all_cols, default=all_cols[:5])
+            
+        if st.button("Generate Table 1"):
+            if not selected_vars:
+                st.error("Please select at least one variable.")
+            else:
+                try:
+                    # Define categorical variables for TableOne
+                    cats = [c for c in selected_vars if c in categorical_cols]
+                    
+                    # Create TableOne
+                    table1 = TableOne(
+                        df, 
+                        columns=selected_vars, 
+                        categorical=cats, 
+                        groupby=groupby_col, 
+                        pval=True if groupby_col else False
+                    )
+                    
+                    st.write(table1.tabulate(tablefmt="github"))
+                    st.dataframe(table1.tableone, use_container_width=True)
+                    
+                    # Download
+                    csv = table1.tableone.to_csv().encode('utf-8')
+                    st.download_button(
+                        label="📥 Download Table 1 as CSV",
+                        data=csv,
+                        file_name='table1.csv',
+                        mime='text/csv',
+                    )
+                except Exception as e:
+                    st.error(f"Error generating Table 1: {str(e)}")
+    else:
+        st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
+
+elif page == "Statistical Wizard":
+    st.title("🧙‍♂️ Statistical Wizard")
+    st.info("Not sure which test to run? Answer 3 questions and I'll guide you.")
+    
+    df = load_data()
+    if df is not None:
+        st.markdown("### Step 1: Describe your data")
+        
+        q1 = st.radio("What kind of data are you comparing?", ["Numerical (e.g., Age, BP)", "Categorical (e.g., Gender, Disease Status)"])
+        
+        if q1.startswith("Numerical"):
+            q2 = st.radio("How many groups are you comparing?", ["2 Groups (e.g., Drug vs Placebo)", "3+ Groups (e.g., Low vs Med vs High Dose)"])
+            
+            if q2.startswith("2 Groups"):
+                q3 = st.radio("Are the groups paired?", ["No (Independent groups)", "Yes (Same patients before/after)"])
+                
+                if q3.startswith("No"):
+                    st.success("✅ Recommendation: **Independent T-Test** (or Mann-Whitney U if not normal)")
+                    if st.button("Go to T-Test"):
+                        # In a real app we might redirect, but here we just point them
+                        st.info("Navigate to 'Statistical Tests' > 'Independent T-Test' in the sidebar.")
+                else:
+                    st.success("✅ Recommendation: **Paired T-Test** (or Wilcoxon Signed-Rank)")
+                    if st.button("Go to Paired T-Test"):
+                        st.info("Navigate to 'Statistical Tests' > 'Paired T-Test' in the sidebar.")
+            else:
+                st.success("✅ Recommendation: **One-Way ANOVA** (or Kruskal-Wallis)")
+                if st.button("Go to ANOVA"):
+                    st.info("Navigate to 'Statistical Tests' > 'ANOVA' in the sidebar.")
+                    
+        else: # Categorical
+            q2_cat = st.radio("What are you looking for?", ["Association between 2 variables", "Agreement between raters"])
+            if q2_cat.startswith("Association"):
+                st.success("✅ Recommendation: **Chi-Square Test** (or Fisher's Exact)")
+                if st.button("Go to Chi-Square"):
+                    st.info("Navigate to 'Statistical Tests' > 'Chi-Square Test' in the sidebar.")
+            else:
+                st.success("✅ Recommendation: **Cohen's Kappa**")
+    else:
+        st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
+
+elif page == "Machine Learning":
+    st.title("🤖 Machine Learning")
+    
+    df = load_data()
+    if df is not None:
+        st.success(f"Working with: **{st.session_state['filename']}**")
+        
+        st.markdown("---")
+        st.subheader("📈 Descriptive Statistics")
+        st.dataframe(df.describe(), use_container_width=True)
+        
+    else:
+        st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
+
 elif page == "Analysis":
     st.title("🔍 Data Analysis")
     
@@ -304,6 +424,18 @@ elif page == "Statistical Tests":
                         group1 = df[df[group_col] == unique_groups[0]][value_col]
                         group2 = df[df[group_col] == unique_groups[1]][value_col]
                         
+                        # Assumption Check: Normality
+                        st.markdown("#### 🔍 Assumption Checks")
+                        norm1 = pg.normality(group1)
+                        norm2 = pg.normality(group2)
+                        p_norm1 = norm1['pval'].values[0]
+                        p_norm2 = norm2['pval'].values[0]
+                        
+                        if p_norm1 < 0.05 or p_norm2 < 0.05:
+                            st.warning(f"⚠️ Data may not be normally distributed (p < 0.05). Consider using Mann-Whitney U Test.")
+                        else:
+                            st.success("✅ Data appears normally distributed (Shapiro-Wilk p > 0.05). T-Test is appropriate.")
+                        
                         res = pg.ttest(group1, group2, correction=True)
                         st.dataframe(res, use_container_width=True)
                         
@@ -315,6 +447,30 @@ elif page == "Statistical Tests":
                             
                         # AI Explanation
                         get_ai_explanation("Independent T-Test", res, p_val)
+                        
+                        # AI Report Writing
+                        if st.button("📝 Generate APA Report"):
+                            with st.spinner("Writing report..."):
+                                try:
+                                    prompt = f"""
+                                    Write a standardized APA style results paragraph for an Independent T-Test.
+                                    
+                                    Context:
+                                    - Variable: {value_col}
+                                    - Groups: {unique_groups[0]} vs {unique_groups[1]}
+                                    - T-statistic: {res['T'].values[0]:.2f}
+                                    - Degrees of Freedom: {res['dof'].values[0]:.2f}
+                                    - P-value: {p_val:.4f}
+                                    - Mean Group 1: {group1.mean():.2f} (SD: {group1.std():.2f})
+                                    - Mean Group 2: {group2.mean():.2f} (SD: {group2.std():.2f})
+                                    
+                                    Output ONLY the paragraph.
+                                    """
+                                    model = genai.GenerativeModel('gemini-1.5-flash')
+                                    response = model.generate_content(prompt)
+                                    st.text_area("APA Results Paragraph", response.text, height=150)
+                                except Exception as e:
+                                    st.error(f"Error generating report: {e}")
                         
                 except Exception as e:
                     st.error(f"Error running test: {str(e)}")
@@ -389,6 +545,24 @@ elif page == "Statistical Tests":
                 
             if st.button("Run ANOVA"):
                 try:
+                    # Assumption Checks
+                    st.markdown("#### 🔍 Assumption Checks")
+                    
+                    # 1. Homogeneity of Variance (Levene's Test)
+                    levene = pg.homoscedasticity(df, dv=value_col, group=group_col)
+                    p_levene = levene['pval'].values[0]
+                    if p_levene < 0.05:
+                        st.warning(f"⚠️ Variances are not equal (Levene's p < 0.05). ANOVA might be invalid. Consider Welch's ANOVA.")
+                    else:
+                        st.success("✅ Variances are equal (Levene's p > 0.05).")
+                        
+                    # 2. Normality (Shapiro-Wilk on residuals is standard, but per-group is easier here)
+                    norm = pg.normality(df, dv=value_col, group=group_col)
+                    if any(norm['pval'] < 0.05):
+                         st.warning("⚠️ Data may not be normally distributed in some groups. Consider Kruskal-Wallis.")
+                    else:
+                         st.success("✅ Data appears normally distributed.")
+
                     res = pg.anova(data=df, dv=value_col, between=group_col)
                     st.dataframe(res, use_container_width=True)
                     
@@ -396,11 +570,33 @@ elif page == "Statistical Tests":
                     if p_val < 0.05:
                             st.success(f"Significant difference found (p < 0.05). P-value: {p_val:.4f}")
                     else:
-                        st.info(f"No significant difference found (p >= 0.05). P-value: {p_val:.4f}")
-                        
+                            st.info(f"No significant difference found (p >= 0.05). P-value: {p_val:.4f}")
+                            
                     # AI Explanation
-                    get_ai_explanation("One-way ANOVA", res, p_val)
+                    get_ai_explanation("ANOVA", res, p_val)
                     
+                    # AI Report Writing
+                    if st.button("📝 Generate APA Report"):
+                        with st.spinner("Writing report..."):
+                            try:
+                                prompt = f"""
+                                Write a standardized APA style results paragraph for a One-Way ANOVA.
+                                
+                                Context:
+                                - Dependent Variable: {value_col}
+                                - Grouping Variable: {group_col}
+                                - F-statistic: {res['F'].values[0]:.2f}
+                                - P-value: {p_val:.4f}
+                                - Degrees of Freedom: {res['ddof1'].values[0]}, {res['ddof2'].values[0]}
+                                
+                                Output ONLY the paragraph.
+                                """
+                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                response = model.generate_content(prompt)
+                                st.text_area("APA Results Paragraph", response.text, height=150)
+                            except Exception as e:
+                                st.error(f"Error generating report: {e}")
+                                
                 except Exception as e:
                     st.error(f"Error running test: {str(e)}")
 
@@ -438,6 +634,79 @@ elif page == "Statistical Tests":
 
     else:
         st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
+
+elif page == "Meta-Analysis":
+    st.title("📊 Meta-Analysis Generator")
+    st.info("Perform a basic meta-analysis from summary data.")
+    
+    st.markdown("### 1. Enter Study Data")
+    st.markdown("Enter the Odds Ratio (OR) and 95% Confidence Intervals for each study.")
+    
+    # Default data for demo
+    default_data = pd.DataFrame({
+        'Study Name': ['Study A', 'Study B', 'Study C'],
+        'OR': [1.5, 2.0, 0.8],
+        'Lower CI': [1.1, 1.5, 0.5],
+        'Upper CI': [2.0, 2.8, 1.2]
+    })
+    
+    edited_df = st.data_editor(default_data, num_rows="dynamic")
+    
+    if st.button("Run Meta-Analysis"):
+        try:
+            # Calculate Log OR and SE
+            # SE = (ln(Upper) - ln(Lower)) / 3.92
+            edited_df['log_or'] = np.log(edited_df['OR'])
+            edited_df['log_lo'] = np.log(edited_df['Lower CI'])
+            edited_df['log_up'] = np.log(edited_df['Upper CI'])
+            edited_df['se'] = (edited_df['log_up'] - edited_df['log_lo']) / 3.92
+            
+            # Inverse Variance Weighting (Fixed Effects for simplicity, or basic Random)
+            # Using statsmodels for robust calculation if possible, else manual
+            # Let's use a simple IV method here for "Zero Coding" speed
+            edited_df['weight'] = 1 / (edited_df['se'] ** 2)
+            
+            # Pooled Effect (Log Scale)
+            pooled_log_or = np.sum(edited_df['weight'] * edited_df['log_or']) / np.sum(edited_df['weight'])
+            pooled_se = np.sqrt(1 / np.sum(edited_df['weight']))
+            
+            pooled_or = np.exp(pooled_log_or)
+            pooled_lo = np.exp(pooled_log_or - 1.96 * pooled_se)
+            pooled_up = np.exp(pooled_log_or + 1.96 * pooled_se)
+            
+            # Heterogeneity (Q and I2)
+            # Q = sum(w * (y - theta)^2)
+            q_stat = np.sum(edited_df['weight'] * (edited_df['log_or'] - pooled_log_or)**2)
+            df_q = len(edited_df) - 1
+            i2 = max(0, (q_stat - df_q) / q_stat) * 100 if q_stat > 0 else 0
+            
+            st.success(f"✅ Pooled Odds Ratio: {pooled_or:.2f} [{pooled_lo:.2f}, {pooled_up:.2f}]")
+            st.info(f"Heterogeneity: I² = {i2:.1f}%")
+            
+            # Forest Plot using Matplotlib
+            fig, ax = plt.subplots(figsize=(8, len(edited_df) * 1))
+            
+            # Studies
+            y_pos = np.arange(len(edited_df))
+            ax.errorbar(edited_df['OR'], y_pos, xerr=[edited_df['OR'] - edited_df['Lower CI'], edited_df['Upper CI'] - edited_df['OR']], 
+                        fmt='o', color='black', ecolor='black', capsize=5, label='Studies')
+            
+            # Pooled
+            ax.errorbar(pooled_or, -1, xerr=[[pooled_or - pooled_lo], [pooled_up - pooled_or]], 
+                        fmt='D', color='red', ecolor='red', capsize=5, label='Pooled')
+            
+            # Labels
+            ax.set_yticks(np.append(y_pos, -1))
+            ax.set_yticklabels(list(edited_df['Study Name']) + ['Pooled'])
+            ax.set_xlabel("Odds Ratio (log scale)")
+            ax.set_xscale('log')
+            ax.axvline(x=1, color='gray', linestyle='--')
+            ax.set_title("Forest Plot")
+            
+            st.pyplot(fig)
+            
+        except Exception as e:
+            st.error(f"Error running meta-analysis: {str(e)}")
 
 elif page == "Visualization":
     st.title("📊 Data Visualization")
