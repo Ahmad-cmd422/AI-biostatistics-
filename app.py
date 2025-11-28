@@ -32,6 +32,21 @@ except ImportError:
 GENAI_API_KEY = "AIzaSyCbcJlXb03XpGAEw82icxDU2-mFAAjG9go"
 genai.configure(api_key=GENAI_API_KEY)
 
+# ROBUST MODEL LOADING (Fixes 404 Error)
+def get_generative_model():
+    """Tries Flash first, falls back to Pro if Flash isn't available."""
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Test if model is accessible
+        return model
+    except Exception as e:
+        # Fallback to older stable model
+        try:
+            return genai.GenerativeModel('gemini-pro')
+        except:
+            # Last resort
+            return genai.GenerativeModel('models/gemini-pro')
+
 # Academic Citations Library (for Methods sections)
 CITATIONS = {
     'scipy': """Virtanen, P., Gommers, R., Oliphant, T. E., Haberland, M., Reddy, T., Cournapeau, D., ... & van Mulbregt, P. (2020). SciPy 1.0: fundamental algorithms for scientific computing in Python. Nature methods, 17(3), 261-272.""",
@@ -94,7 +109,7 @@ Question: Is this test statistically appropriate for these data types?
 Format: YES/NO - [one sentence reason]
 """
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = get_generative_model()
         response = model.generate_content(prompt)
         return response.text.strip()
     except:
@@ -871,7 +886,7 @@ Statistical analysis was performed using Python programming language (version 3.
                                     
                                     Output ONLY the paragraph.
                                     """
-                                    model = genai.GenerativeModel('gemini-1.5-flash')
+                                    model = get_generative_model()
                                     response = model.generate_content(prompt)
                                     st.text_area("APA Results Paragraph", response.text, height=150)
                                 except Exception as e:
@@ -1050,7 +1065,7 @@ Statistical analysis was performed using Python programming language (version 3.
                                 
                                 Output ONLY the paragraph.
                                 """
-                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                model = get_generative_model()
                                 response = model.generate_content(prompt)
                                 st.text_area("APA Results Paragraph", response.text, height=150)
                             except Exception as e:
@@ -1300,7 +1315,7 @@ elif page == "AI Chatbot":
                     - Do not include any explanations outside the code block. Just the code.
                     """
                     
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    model = get_generative_model()
                     response = model.generate_content(full_prompt)
                     ai_response = response.text
                     
