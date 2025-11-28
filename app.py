@@ -100,6 +100,33 @@ Format: YES/NO - [one sentence reason]
     except:
         return "YES - Unable to validate, proceeding with user selection."
 
+def detect_variable_type(column):
+    """Auto-detect variable type for smart data ingestion."""
+    # Check if column is numeric
+    if pd.api.types.is_numeric_dtype(column):
+        unique_count = column.nunique()
+        
+        # Check if it's likely an ID column
+        if column.name.lower() in ['id', 'patient_id', 'subject_id', 'record_id']:
+            return "ID (exclude from analysis)"
+        # Categorical if few unique values
+        elif unique_count < 10:
+            return "Categorical (numeric codes)"
+        # Possibly ordinal
+        elif unique_count < 30:
+            return "Ordinal (or Continuous)"
+        # Continuous
+        else:
+            return "Continuous"
+    # Non-numeric
+    else:
+        # Check if it's a date
+        if pd.api.types.is_datetime64_any_dtype(column):
+            return "Date (exclude or convert)"
+        # Text categorical
+        else:
+            return "Categorical (text)"
+
 # Helper function for AI explanations
 def get_ai_explanation(test_name, result_df, p_value=None):
     """Generates and streams AI explanation for statistical results."""
@@ -187,7 +214,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("Navigation")
 page = st.sidebar.radio(
     "Select a page:",
-    ["Home", "Data Upload", "Table 1", "Statistical Wizard", "Statistical Tests", "Meta-Analysis", "Visualization", "Machine Learning", "AI Chatbot"]
+    ["Home", "Data Upload", "Variable Setup", "Research Question", "Table 1", "Statistical Wizard", "Statistical Tests", "Meta-Analysis", "Visualization", "Machine Learning", "AI Chatbot"]
 )
 st.sidebar.markdown("---")
 st.sidebar.info("Upload your data files (.csv or .xlsx) to get started!")
@@ -341,6 +368,173 @@ elif page == "Data Upload":
             st.info("Please ensure your file is properly formatted and not corrupted.")
     else:
         st.info("👆 Please upload a file to get started")
+
+elif page == "Variable Setup":
+    st.title("🔍 Variable Setup & Confirmation")
+    st.info("**CRITICAL STEP**: Confirm variable types to ensure accurate statistical analysis.")
+    
+    df = load_data()
+    if df is not None:
+        st.success(f"Working with: **{st.session_state['filename']}**")
+        st.markdown("---")
+        
+        st.markdown("### 🤖 Auto-Detection Results")
+        st.markdown("Review and confirm the detected variable types below. This prevents statistical errors.")
+        
+        # Auto-detect all variables
+        if 'var_types' not in st.session_state:
+            st.session_state['var_types'] = {}
+            st.session_state['var_roles'] = {}
+        
+        # Create detection table
+        detection_data = []
+        for col in df.columns:
+            auto_type = detect_variable_type(df[col])
+            detection_data.append({
+                'Variable Name': col,
+                'Auto-Detected Type': auto_type,
+                'Sample Values': str(df[col].head(3).tolist())[:50] + '...',
+                'Unique Values': df[col].nunique()
+            })
+        
+        detection_df = pd.DataFrame(detection_data)
+        st.dataframe(detection_df, use_container_width=True)
+        
+        st.markdown("---")
+        st.markdown("### ✅ Confirm Variable Types & Roles")
+        
+        # User confirmation interface
+        confirmed_vars = {}
+        var_roles = {}
+        
+        for col in df.columns:
+            with st.expander(f"📊 {col}", expanded=False):
+                col1, col2, col3 = st.columns(3)
+                
+                auto_type = detect_variable_type(df[col])
+                
+                with col1:
+                    confirmed_type = st.selectbox(
+                        f"Confirm Type for '{col}':",
+                        ["Continuous", "Categorical", "Ordinal", "Date", "ID (Exclude)"],
+                        index=0 if "Continuous" in auto_type else (1 if "Categorical" in auto_type else 2),
+                        key=f"type_{col}"
+                    )
+                    confirmed_vars[col] = confirmed_type
+                
+                with col2:
+                    if confirmed_type not in ["ID (Exclude)", "Date"]:
+                        role = st.selectbox(
+                            f"Role:",
+                            ["Measure (Outcome)", "Grouping", "Exclude"],
+                            key=f"role_{col}"
+                        )
+                        var_roles[col] = role
+                    else:
+                        st.info("Excluded")
+                        var_roles[col] = "Exclude"
+                
+                with col3:
+                    st.metric("Unique Values", df[col].nunique())
+        
+        # Save button
+        if st.button("💾 Save Variable Configuration", type="primary"):
+            st.session_state['var_types'] = confirmed_vars
+            st.session_state['var_roles'] = var_roles
+            st.success("✅ Variable configuration saved! You can now proceed to 'Research Question'.")
+            st.balloons()
+            
+            # Summary
+            measure_vars = [k for k, v in var_roles.items() if v == "Measure (Outcome)"]
+            group_vars = [k for k, v in var_roles.items() if v == "Grouping"]
+            
+            st.markdown("### 📋 Configuration Summary")
+            st.write(f"**Outcome Variables**: {', '.join(measure_vars) if measure_vars else 'None'}")
+            st.write(f"**Grouping Variables**: {', '.join(group_vars) if group_vars else 'None'}")
+    else:
+        st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
+
+elif page == "Research Question":
+    st.title("🎯 Research Question Builder")
+    st.info("**Natural Language Approach**: Tell us your research question, we'll pick the right test.")
+    
+    df = load_data()
+    if df is not None and 'var_types' in st.session_state:
+        st.success(f"Working with: **{st.session_state['filename']}**")
+        st.markdown("---")
+        
+        # Get continuous and categorical variables
+        var_types = st.session_state['var_types']
+        var_roles = st.session_state['var_roles']
+        
+        continuous_vars = [k for k, v in var_types.items() if v == "Continuous" and var_roles[k] != "Exclude"]
+        categorical_vars = [k for k, v in var_types.items() if v in ["Categorical", "Ordinal"] and var_roles[k] != "Exclude"]
+        
+        st.markdown("### 📝 Build Your Research Question")
+        st.markdown("*Fill in the blanks to describe your research question:*")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**I want to see if...**")
+            dependent_var = st.selectbox(
+                "Outcome Variable (what you're measuring):",
+                continuous_vars + categorical_vars,
+                help="The variable you want to analyze"
+            )
+        
+        with col2:
+            st.markdown("**...is different based on...**")
+            independent_var = st.selectbox(
+                "Grouping Variable (what defines groups):",
+                categorical_vars + continuous_vars,
+                help="The variable that defines groups or categories"
+            )
+        
+        if st.button("🔍 Find Recommended Test", type="primary"):
+            # HARD-CODED LOGIC ENGINE (Python is King!)
+            dep_type = var_types[dependent_var]
+            ind_type = var_types[independent_var]
+            num_groups = df[independent_var].nunique() if ind_type in ["Categorical", "Ordinal"] else None
+            
+            recommended_test = None
+            reason = ""
+            
+            # Decision Tree
+            if dep_type == "Continuous" and ind_type in ["Categorical", "Ordinal"]:
+                if num_groups == 2:
+                    recommended_test = "Independent T-Test"
+                    reason = f"Comparing a continuous variable ({dependent_var}) across 2 groups in {independent_var}."
+                elif num_groups >= 3:
+                    recommended_test = "ANOVA"
+                    reason = f"Comparing a continuous variable ({dependent_var}) across {num_groups} groups in {independent_var}."
+            elif dep_type in ["Categorical", "Ordinal"] and ind_type in ["Categorical", "Ordinal"]:
+                recommended_test = "Chi-Square Test"
+                reason = f"Testing association between two categorical variables: {dependent_var} and {independent_var}."
+            elif dep_type == "Continuous" and ind_type == "Continuous":
+                recommended_test = "Pearson Correlation"
+                reason = f"Measuring linear relationship between two continuous variables: {dependent_var} and {independent_var}."
+            else:
+                recommended_test = "No Standard Test"
+                reason = "This combination of variable types doesn't match a standard statistical test. Please review your variable types."
+            
+            # Display Recommendation
+            if recommended_test != "No Standard Test":
+                st.success(f"### ✅ Recommended Test: **{recommended_test}**")
+                st.info(f"**Reason**: {reason}")
+                
+                st.markdown("### 🚀 Ready to Run?")
+                st.markdown(f"Navigate to **'Statistical Tests'** and select **{recommended_test}** to run your analysis.")
+                st.markdown(f"- **Outcome**: {dependent_var} ({dep_type})")
+                st.markdown(f"- **Grouping**: {independent_var} ({ind_type})")
+            else:
+                st.error(f"❌ {reason}")
+                st.info("💡 Try going back to 'Variable Setup' to adjust variable types.")
+    
+    elif df is not None:
+        st.warning("⚠️ Please complete 'Variable Setup' first to define your variable types.")
+    else:
+        st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
 
 elif page == "Table 1":
     st.title("📋 Table 1 Generator")
