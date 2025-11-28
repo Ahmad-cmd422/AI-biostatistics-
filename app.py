@@ -774,59 +774,86 @@ elif page == "Statistical Tests":
                         group1 = df[df[group_col] == unique_groups[0]][value_col]
                         group2 = df[df[group_col] == unique_groups[1]][value_col]
                         
-                        # Assumption Check: Normality
-                        st.markdown("#### 🔍 Assumption Checks")
-                        norm1 = pg.normality(group1)
-                        norm2 = pg.normality(group2)
-                        p_norm1 = norm1['pval'].values[0]
-                        p_norm2 = norm2['pval'].values[0]
+                        # USE SMART T-TEST (Auto-switching)
+                        st.markdown("#### 🔍 Assumption Checks & Auto-Selection")
+                        res, test_used, test_reason = smart_ttest(group1, group2, unique_groups)
                         
-                        if p_norm1 < 0.05 or p_norm2 < 0.05:
-                            st.warning(f"⚠️ Data may not be normally distributed (p < 0.05). Consider using Mann-Whitney U Test.")
-                        else:
-                            st.success("✅ Data appears normally distributed (Shapiro-Wilk p > 0.05). T-Test is appropriate.")
+                        # RESULTS DISPLAY (Enhanced)
+                        st.markdown("---")
+                        st.markdown("### 📊 RESULTS")
+                        st.markdown(f"**Test Used:** {test_used}")
+                        st.markdown(f"**Reason:** {test_reason}")
                         
-                        # CALCULATION (Deterministic - Using Pingouin library)
-                        res = pg.ttest(group1, group2, correction=True)
                         st.dataframe(res, use_container_width=True)
                         
-                        p_val = res['p-val'].values[0]
+                        # BOLD P-VALUE DISPLAY
+                        p_val = res['p-val'].values[0] if 'p-val' in res.columns else res['p-unc'].values[0]
+                        st.markdown("### 🎯 Key Result")
+                        st.markdown(f"# **p-value: {p_val:.4f}**")
+                        
                         if p_val < 0.05:
-                            st.success(f"Significant difference found (p < 0.05). P-value: {p_val:.4f}")
+                            st.success(f"✅ **Significant difference found** (p < 0.05)")
                         else:
-                            st.info(f"No significant difference found (p >= 0.05). P-value: {p_val:.4f}")
+                            st.info(f"ℹ️ **No significant difference found** (p >= 0.05)")
+                        
+                        st.markdown("---")
                         
                         # CODE TRANSPARENCY
                         with st.expander("📋 View Calculation Code (For Academic Transparency)"):
                             st.markdown("**Exact Python code used for this calculation:**")
-                            code_snippet = f"""import pingouin as pg
-import pandas as pd
+                            if test_used == "Mann-Whitney U Test":
+                                code_snippet = f"""import pingouin as pg
 
 # Extract groups
 group1 = df[df['{group_col}'] == '{unique_groups[0]}']['{value_col}']
 group2 = df[df['{group_col}'] == '{unique_groups[1]}']['{value_col}']
 
-# Run Independent T-Test with Welch's correction
+# Check normality
+norm1 = pg.normality(group1)
+norm2 = pg.normality(group2)
+
+# Data not normal - Use Mann-Whitney U Test
+result = pg.mwu(group1, group2)
+
+# Result: 
+# p-value: {p_val:.4f}"""
+                            else:
+                                code_snippet = f"""import pingouin as pg
+
+# Extract groups
+group1 = df[df['{group_col}'] == '{unique_groups[0]}']['{value_col}']
+group2 = df[df['{group_col}'] == '{unique_groups[1]}']['{value_col}']
+
+# Data is normal - Use Independent T-Test
 result = pg.ttest(group1, group2, correction=True)
 
 # Result: 
-# T-statistic: {res['T'].values[0]:.4f}
-# p-value: {p_val:.4f}
-# Degrees of freedom: {res['dof'].values[0]:.2f}"""
+# T-statistic: {res['T'].values[0] if 'T' in res.columns else 'N/A'}
+# p-value: {p_val:.4f}"""
                             st.code(code_snippet, language='python')
                             st.info("💡 This code uses the **Pingouin** library, which is peer-reviewed and cited in academic publications.")
-                            
-                        # AI Explanation
-                        get_ai_explanation("Independent T-Test", res, p_val)
                         
-                        # ACADEMIC CITATION
                         st.markdown("---")
-                        st.markdown("### 📚 Methods Section Citation")
-                        citation = generate_citation("T-Test (Independent)", None)
-                        st.markdown(citation)
-                        st.info("💡 Copy the text above for your paper's Methods section. It references the peer-reviewed libraries, not this app.")
                         
-                        # AI Report Writing
+                        # AI INTERPRETATION (Separate Section)
+                        get_ai_explanation(test_used, res, p_val)
+                        
+                        st.markdown("---")
+                        
+                        # ACADEMIC CITATION (Updated for auto-switching)
+                        st.markdown("### 📚 Methods Section Citation")
+                        citation_text = f"""**Methods Section Text:**
+
+Statistical analysis was performed using Python programming language (version 3.11) with the Pingouin library (Vallat, 2018). Data normality was assessed using the Shapiro-Wilk test. {'Since data followed a normal distribution, an independent samples t-test was used' if test_used == 'Independent T-Test' else 'As the data violated normality assumptions, a non-parametric Mann-Whitney U test was used'} to compare continuous variables between two groups. Statistical significance was set at α = 0.05.
+
+**References:**
+- Vallat, R. (2018). Pingouin: statistics in Python. Journal of Open Source Software, 3(31), 1026.
+- Virtanen, P., et al. (2020). SciPy 1.0: fundamental algorithms for scientific computing in Python. Nature methods, 17(3), 261-272.
+"""
+                        st.markdown(citation_text)
+                        st.info("💡 Copy the text above for your paper's Methods section. It documents the automatic test selection based on assumption violations.")
+                        
+                        # AI Report Writing (Optional)
                         if st.button("📝 Generate APA Report"):
                             with st.spinner("Writing report..."):
                                 try:
@@ -936,61 +963,78 @@ result = pg.ttest(group1, group2, correction=True)
                     st.warning("This test may produce invalid results. Consider reviewing your data or choosing a different test.")
                 
                 try:
-                    # Assumption Checks
-                    st.markdown("#### 🔍 Assumption Checks")
+                    # USE SMART ANOVA (Auto-switching)
+                    st.markdown("#### 🔍 Assumption Checks & Auto-Selection")
+                    res, test_used, test_reason = smart_anova(df, value_col, group_col)
                     
-                    # 1. Homogeneity of Variance (Levene's Test)
-                    levene = pg.homoscedasticity(df, dv=value_col, group=group_col)
-                    p_levene = levene['pval'].values[0]
-                    if p_levene < 0.05:
-                        st.warning(f"⚠️ Variances are not equal (Levene's p < 0.05). ANOVA might be invalid. Consider Welch's ANOVA.")
-                    else:
-                        st.success("✅ Variances are equal (Levene's p > 0.05).")
-                        
-                    # 2. Normality
-                    norm = pg.normality(df, dv=value_col, group=group_col)
-                    if any(norm['pval'] < 0.05):
-                         st.warning("⚠️ Data may not be normally distributed in some groups. Consider Kruskal-Wallis.")
-                    else:
-                         st.success("✅ Data appears normally distributed.")
-
-                    # CALCULATION (Deterministic - Using Pingouin library)
-                    res = pg.anova(data=df, dv=value_col, between=group_col)
+                    # RESULTS DISPLAY (Enhanced)
+                    st.markdown("---")
+                    st.markdown("### 📊 RESULTS")
+                    st.markdown(f"**Test Used:** {test_used}")
+                    st.markdown(f"**Reason:** {test_reason}")
+                    
                     st.dataframe(res, use_container_width=True)
                     
-                    p_val = res['p-unc'].values[0]
+                    # BOLD P-VALUE DISPLAY
+                    p_val = res['p-unc'].values[0] if 'p-unc' in res.columns else res['p-val'].values[0]
+                    st.markdown("### 🎯 Key Result")
+                    st.markdown(f"# **p-value: {p_val:.4f}**")
+                    
                     if p_val < 0.05:
-                            st.success(f"Significant difference found (p < 0.05). P-value: {p_val:.4f}")
+                        st.success(f"✅ **Significant difference found** (p < 0.05)")
                     else:
-                            st.info(f"No significant difference found (p >= 0.05). P-value: {p_val:.4f}")
+                        st.info(f"ℹ️ **No significant difference found** (p >= 0.05)")
+                    
+                    st.markdown("---")
                     
                     # CODE TRANSPARENCY
                     with st.expander("📋 View Calculation Code (For Academic Transparency)"):
                         st.markdown("**Exact Python code used for this calculation:**")
-                        code_snippet = f"""import pingouin as pg
-import pandas as pd
+                        if test_used == "Kruskal-Wallis Test":
+                            code_snippet = f"""import pingouin as pg
 
-# Run One-way ANOVA
+# Check assumptions
+levene = pg.homoscedasticity(df, dv='{value_col}', group='{group_col}')
+norm = pg.normality(df, dv='{value_col}', group='{group_col}')
+
+# Assumptions violated - Use Kruskal-Wallis Test
+result = pg.kruskal(df, dv='{value_col}', between='{group_col}')
+
+# Result:
+# p-value: {p_val:.4f}"""
+                        else:
+                            code_snippet = f"""import pingouin as pg
+
+# Assumptions met - Use One-way ANOVA
 result = pg.anova(data=df, dv='{value_col}', between='{group_col}')
 
 # Result:
-# F-statistic: {res['F'].values[0]:.4f}
-# p-value: {p_val:.4f}
-# Degrees of freedom: {res['ddof1'].values[0]}, {res['ddof2'].values[0]}"""
+# F-statistic: {res['F'].values[0] if 'F' in res.columns else 'N/A'}
+# p-value: {p_val:.4f}"""
                         st.code(code_snippet, language='python')
                         st.info("💡 This code uses the **Pingouin** library, which is peer-reviewed and cited in academic publications.")
-                            
-                    # AI Explanation
-                    get_ai_explanation("ANOVA", res, p_val)
                     
-                    # ACADEMIC CITATION
                     st.markdown("---")
-                    st.markdown("### 📚 Methods Section Citation")
-                    citation = generate_citation("ANOVA", None)
-                    st.markdown(citation)
-                    st.info("💡 Copy the text above for your paper's Methods section. It references the peer-reviewed libraries, not this app.")
                     
-                    # AI Report Writing
+                    # AI INTERPRETATION (Separate Section)
+                    get_ai_explanation(test_used, res, p_val)
+                    
+                    st.markdown("---")
+                    
+                    # ACADEMIC CITATION (Updated for auto-switching)
+                    st.markdown("### 📚 Methods Section Citation")
+                    citation_text = f"""**Methods Section Text:**
+
+Statistical analysis was performed using Python programming language (version 3.11) with the Pingouin library (Vallat, 2018). Assumptions of normality and homogeneity of variance were assessed using Shapiro-Wilk and Levene's tests, respectively. {'Since assumptions were met, a one-way ANOVA was used' if test_used == 'One-way ANOVA' else 'As the data violated parametric assumptions, a non-parametric Kruskal-Wallis test was used'} to compare means across multiple groups. Statistical significance was set at α = 0.05.
+
+**References:**
+- Vallat, R. (2018). Pingouin: statistics in Python. Journal of Open Source Software, 3(31), 1026.
+- Virtanen, P., et al. (2020). SciPy 1.0: fundamental algorithms for scientific computing in Python. Nature methods, 17(3), 261-272.
+"""
+                    st.markdown(citation_text)
+                    st.info("💡 Copy the text above for your paper's Methods section. It documents the automatic test selection based on assumption violations.")
+                    
+                    # AI Report Writing (Optional)
                     if st.button("📝 Generate APA Report"):
                         with st.spinner("Writing report..."):
                             try:
