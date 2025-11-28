@@ -40,18 +40,33 @@ except:
 
 # ROBUST MODEL LOADING (Fixes 404 Error)
 def get_generative_model():
-    """Tries Flash first, falls back to Pro if Flash isn't available."""
+    """
+    Dynamically selects the best available Gemini model.
+    Prioritizes 2.0/2.5 Flash variants, then 1.5 Flash, then Pro.
+    """
+    preferred_order = [
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-exp',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro',
+        'gemini-pro'
+    ]
+    
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        # Test if model is accessible
-        return model
+        # Attempt to list models available to this API key
+        available_models = [m.name.replace('models/', '') for m in genai.list_models()]
+        
+        # Pick the first preferred model that exists in the available list
+        for model_name in preferred_order:
+            if model_name in available_models:
+                return genai.GenerativeModel(model_name)
     except Exception as e:
-        # Fallback to older stable model
-        try:
-            return genai.GenerativeModel('gemini-pro')
-        except:
-            # Last resort
-            return genai.GenerativeModel('models/gemini-pro')
+        # If listing fails (e.g. permission issue), just try the newest one
+        pass
+
+    # Fallback: Default to gemini-2.0-flash if we can't check, 
+    # as 1.5-flash is reported deprecated for some keys.
+    return genai.GenerativeModel('gemini-2.0-flash')
 
 # Academic Citations Library (for Methods sections)
 CITATIONS = {
@@ -226,7 +241,7 @@ def get_ai_explanation(test_name, result_df, p_value=None):
     """
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = get_generative_model()
         response = model.generate_content(prompt, stream=True)
         
         def stream_generator():
