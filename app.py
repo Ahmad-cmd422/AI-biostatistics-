@@ -12,9 +12,20 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, r2_score, confusion_matrix, classification_report
 import matplotlib.pyplot as plt
-from tableone import TableOne
-import statsmodels.stats.api as sms
-import statsmodels.api as sm
+
+# Optional imports for advanced features
+try:
+    from tableone import TableOne
+    TABLEONE_AVAILABLE = True
+except ImportError:
+    TABLEONE_AVAILABLE = False
+    
+try:
+    import statsmodels.stats.api as sms
+    import statsmodels.api as sm
+    STATSMODELS_AVAILABLE = True
+except ImportError:
+    STATSMODELS_AVAILABLE = False
 
 # Configure Gemini API
 # In a real app, use st.secrets
@@ -264,6 +275,12 @@ elif page == "Data Upload":
 
 elif page == "Table 1":
     st.title("📋 Table 1 Generator")
+    
+    if not TABLEONE_AVAILABLE:
+        st.error("⚠️ The 'tableone' library is not available due to a version conflict. Please install compatible versions manually.")
+        st.code("pip install 'statsmodels<0.15' tableone", language="bash")
+        st.stop()
+    
     st.info("Automatically generate a 'Table 1' (Demographics) for your study.")
     
     df = load_data()
