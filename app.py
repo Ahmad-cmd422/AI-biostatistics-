@@ -7,6 +7,11 @@ import numpy as np
 import google.generativeai as genai
 import os
 import plotly.express as px
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import accuracy_score, r2_score, confusion_matrix, classification_report
+import matplotlib.pyplot as plt
 
 # Configure Gemini API
 # In a real app, use st.secrets
@@ -53,13 +58,42 @@ st.set_page_config(
     layout="wide"
 )
 
+# Auto-load dataset for stress testing
+local_path = "/Users/ahmadtarek/Downloads/healthcare_dataset.csv"
+if 'df' not in st.session_state and os.path.exists(local_path):
+    try:
+        df = pd.read_csv(local_path)
+        # Clean data immediately
+        for col in df.select_dtypes(include=['object']).columns:
+            try:
+                df[col] = df[col].astype(str).str.title().str.strip()
+            except:
+                pass
+        for col in df.columns:
+            if 'date' in col.lower() or 'time' in col.lower() or 'admission' in col.lower() or 'discharge' in col.lower():
+                try:
+                    df[col] = pd.to_datetime(df[col], errors='coerce')
+                except:
+                    pass
+        
+        st.session_state['df'] = df
+        st.session_state['filename'] = "healthcare_dataset.csv"
+        # Feature Engineering
+        adm_col = next((c for c in df.columns if 'admission' in c.lower() and 'date' in c.lower()), None)
+        dis_col = next((c for c in df.columns if 'discharge' in c.lower() and 'date' in c.lower()), None)
+        if adm_col and dis_col:
+            df['Length of Stay'] = (df[dis_col] - df[adm_col]).dt.days
+            
+    except Exception as e:
+        st.error(f"Auto-load failed: {e}")
+
 # Sidebar for navigation
 st.sidebar.title("📊 Rbiostatitics")
 st.sidebar.markdown("---")
 st.sidebar.header("Navigation")
 page = st.sidebar.radio(
     "Select a page:",
-    ["Home", "Data Upload", "Analysis", "Statistical Tests", "Visualization"]
+    ["Home", "Data Upload", "Analysis", "Statistical Tests", "Visualization", "Machine Learning", "AI Chatbot"]
 )
 st.sidebar.markdown("---")
 st.sidebar.info("Upload your data files (.csv or .xlsx) to get started!")
@@ -90,6 +124,19 @@ elif page == "Data Upload":
         help="Upload a .csv or .xlsx file containing your data"
     )
     
+    # Auto-load for testing/demo
+    local_path = "/Users/ahmadtarek/Downloads/healthcare_dataset.csv"
+    if os.path.exists(local_path):
+        if st.button("🚀 Load Local Dataset (healthcare_dataset.csv)"):
+            try:
+                df = pd.read_csv(local_path)
+                st.session_state['df'] = df
+                st.session_state['filename'] = "healthcare_dataset.csv"
+                st.success("Loaded local dataset!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to load local file: {e}")
+    
     if uploaded_file is not None:
         try:
             # Determine file type and load accordingly
@@ -102,11 +149,57 @@ elif page == "Data Upload":
             if df.empty:
                 st.error("⚠️ The uploaded file is empty. Please upload a file with data.")
             else:
+                # Data Cleaning & Preprocessing
+                # 1. Convert object columns to string and title case
+                for col in df.select_dtypes(include=['object']).columns:
+                    try:
+                        df[col] = df[col].astype(str).str.title().str.strip()
+                    except:
+                        pass
+                
+                # 2. Date Parsing
+                for col in df.columns:
+                    if 'date' in col.lower() or 'time' in col.lower() or 'admission' in col.lower() or 'discharge' in col.lower():
+                        try:
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
+                        except:
+                            pass
+
+                # 3. Feature Engineering: Length of Stay
+                # Check for common admission/discharge column names
+                adm_col = next((c for c in df.columns if 'admission' in c.lower() and 'date' in c.lower()), None)
+                dis_col = next((c for c in df.columns if 'discharge' in c.lower() and 'date' in c.lower()), None)
+                
+                if adm_col and dis_col:
+                    df['Length of Stay'] = (df[dis_col] - df[adm_col]).dt.days
+                
                 # Store dataframe in session state
                 st.session_state['df'] = df
                 st.session_state['filename'] = uploaded_file.name
                 
-                st.success(f"✅ Successfully loaded: **{uploaded_file.name}**")
+                st.success(f"✅ Successfully loaded and cleaned: **{uploaded_file.name}**")
+                
+                # 2. Date Parsing
+                for col in df.columns:
+                    if 'date' in col.lower() or 'time' in col.lower() or 'admission' in col.lower() or 'discharge' in col.lower():
+                        try:
+                            df[col] = pd.to_datetime(df[col], errors='coerce')
+                        except:
+                            pass
+
+                # 3. Feature Engineering: Length of Stay
+                # Check for common admission/discharge column names
+                adm_col = next((c for c in df.columns if 'admission' in c.lower() and 'date' in c.lower()), None)
+                dis_col = next((c for c in df.columns if 'discharge' in c.lower() and 'date' in c.lower()), None)
+                
+                if adm_col and dis_col:
+                    df['Length of Stay'] = (df[dis_col] - df[adm_col]).dt.days
+                
+                # Store dataframe in session state
+                st.session_state['df'] = df
+                st.session_state['filename'] = uploaded_file.name
+                
+                st.success(f"✅ Successfully loaded and cleaned: **{uploaded_file.name}**")
                 
                 # Display basic information
                 st.markdown("---")
