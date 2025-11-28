@@ -1,6 +1,7 @@
 __pycache__/
-*.pyc
-.DS_Store
+*.py[cod]
 .env
-venv/
+*.log
 .streamlit/secrets.toml
+healthcare_dataset.csv
+*.DS_Storetoml

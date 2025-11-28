@@ -27,10 +27,16 @@ try:
 except ImportError:
     STATSMODELS_AVAILABLE = False
 
-# Configure Gemini API
-# In a real app, use st.secrets
-GENAI_API_KEY = "AIzaSyCbcJlXb03XpGAEw82icxDU2-mFAAjG9go"
-genai.configure(api_key=GENAI_API_KEY)
+# Configure Gemini API (Secure for Cloud Deployment)
+# API key is stored in Streamlit secrets, not in code
+try:
+    GENAI_API_KEY = st.secrets["GENAI_API_KEY"]
+    genai.configure(api_key=GENAI_API_KEY)
+except:
+    # Fallback for local development without secrets
+    st.warning("⚠️ No API Key found. Please configure secrets in Streamlit Cloud or add .streamlit/secrets.toml locally.")
+    GENAI_API_KEY = None
+
 
 # ROBUST MODEL LOADING (Fixes 404 Error)
 def get_generative_model():
