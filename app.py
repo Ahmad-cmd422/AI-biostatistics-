@@ -127,6 +127,63 @@ def detect_variable_type(column):
         else:
             return "Categorical (text)"
 
+def smart_ttest(group1, group2, group_names):
+    """Smart T-Test with automatic switching to Mann-Whitney if assumptions violated."""
+    # Check normality with Shapiro-Wilk
+    norm1 = pg.normality(group1)
+    norm2 = pg.normality(group2)
+    p_norm1 = norm1['pval'].values[0]
+    p_norm2 = norm2['pval'].values[0]
+    
+    # Auto-switch logic
+    if p_norm1 < 0.05 or p_norm2 < 0.05:
+        # DATA NOT NORMAL - AUTO-SWITCH
+        st.warning(f"🔄 **Auto-Switch Activated**: Data is not normally distributed (Shapiro-Wilk p < 0.05). Automatically switched from T-Test to **Mann-Whitney U Test** for accuracy.")
+        result = pg.mwu(group1, group2)
+        test_used = "Mann-Whitney U Test"
+        test_reason = "Non-parametric alternative used due to violated normality assumption"
+    else:
+        # DATA IS NORMAL - USE T-TEST
+        st.success("✅ Data is normally distributed (Shapiro-Wilk p > 0.05). Using **Independent T-Test**.")
+        result = pg.ttest(group1, group2, correction=True)
+        test_used = "Independent T-Test"
+        test_reason = "Parametric test appropriate for normally distributed data"
+    
+    return result, test_used, test_reason
+
+def smart_anova(df, dv, group_col):
+    """Smart ANOVA with automatic switching to Kruskal-Wallis if assumptions violated."""
+    # Check assumptions
+    # 1. Homogeneity of variance
+    levene = pg.homoscedasticity(df, dv=dv, group=group_col)
+    p_levene = levene['pval'].values[0]
+    
+    # 2. Normality per group
+    norm = pg.normality(df, dv=dv, group=group_col)
+    normality_violated = any(norm['pval'] < 0.05)
+    
+    # Auto-switch logic
+    if p_levene < 0.05 or normality_violated:
+        # ASSUMPTIONS VIOLATED - AUTO-SWITCH
+        reasons = []
+        if p_levene < 0.05:
+            reasons.append("unequal variances (Levene's p < 0.05)")
+        if normality_violated:
+            reasons.append("non-normal distribution (Shapiro-Wilk p < 0.05)")
+        
+        st.warning(f"🔄 **Auto-Switch Activated**: Data violates assumptions ({', '.join(reasons)}). Automatically switched from ANOVA to **Kruskal-Wallis Test** for accuracy.")
+        result = pg.kruskal(df, dv=dv, between=group_col)
+        test_used = "Kruskal-Wallis Test"
+        test_reason = f"Non-parametric alternative used due to: {', '.join(reasons)}"
+    else:
+        # ASSUMPTIONS MET - USE ANOVA
+        st.success("✅ Assumptions met (equal variances + normal distribution). Using **One-way ANOVA**.")
+        result = pg.anova(data=df, dv=dv, between=group_col)
+        test_used = "One-way ANOVA"
+        test_reason = "Parametric test appropriate for data meeting assumptions"
+    
+    return result, test_used, test_reason
+
 # Helper function for AI explanations
 def get_ai_explanation(test_name, result_df, p_value=None):
     """Generates and streams AI explanation for statistical results."""
@@ -1144,5 +1201,96 @@ elif page == "Visualization":
                 except Exception as e:
                     st.error(f"Error creating plot: {str(e)}")
 
+    else:
+        st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
+
+elif page == "AI Chatbot":
+    st.title("💬 Chat with Data")
+    
+    df = load_data()
+    if df is not None:
+        st.success(f"Working with: **{st.session_state['filename']}**")
+        
+        st.info("Ask questions about your data in plain English. The AI will generate code to answer you.")
+        
+        # Chat History
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        if prompt := st.chat_input("Ask a question (e.g., 'What is the average age?', 'Plot gender distribution')"):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                
+                try:
+                    # Construct Prompt
+                    schema_info = df.dtypes.to_string()
+                    head_info = df.head(3).to_string()
+                    
+                    full_prompt = f"""
+                    You are a Python Data Analyst. You have a pandas DataFrame named 'df'.
+                    
+                    Data Schema:
+                    {schema_info}
+                    
+                    First 3 rows:
+                    {head_info}
+                    
+                    User Question: {prompt}
+                    
+                    Write Python code to answer the question. 
+                    - If the user asks for a plot, use 'st.bar_chart', 'st.line_chart', or 'plotly.express'.
+                    - If the user asks for a value, print it or use 'st.write'.
+                    - DO NOT create a new dataframe, use the existing 'df'.
+                    - Wrap your code in a block like this:
+                    ```python
+                    # code here
+                    ```
+                    - Do not include any explanations outside the code block. Just the code.
+                    """
+                    
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    response = model.generate_content(full_prompt)
+                    ai_response = response.text
+                    
+                    # Extract Code
+                    if "```python" in ai_response:
+                        code_to_run = ai_response.split("```python")[1].split("```")[0].strip()
+                        
+                        # Display Code (Optional, for transparency)
+                        with st.expander("View Generated Code"):
+                            st.code(code_to_run, language='python')
+                        
+                        # Execute Code
+                        # We need to pass 'df', 'st', 'pd', 'px', 'plt' to the exec environment
+                        local_vars = {
+                            'df': df,
+                            'st': st,
+                            'pd': pd,
+                            'px': px,
+                            'plt': plt
+                        }
+                        
+                        # Capture output
+                        try:
+                            exec(code_to_run, globals(), local_vars)
+                            st.session_state.messages.append({"role": "assistant", "content": "Executed code to answer your question."})
+                        except Exception as exec_error:
+                            st.error(f"Error executing code: {exec_error}")
+                            st.session_state.messages.append({"role": "assistant", "content": f"I tried to run code but failed: {exec_error}"})
+                            
+                    else:
+                        st.write(ai_response)
+                        st.session_state.messages.append({"role": "assistant", "content": ai_response})
+                        
+                except Exception as e:
+                    st.error(f"AI Error: {str(e)}")
     else:
         st.warning("⚠️ No data loaded. Please upload a file in the 'Data Upload' page first.")
