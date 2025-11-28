@@ -32,6 +32,75 @@ except ImportError:
 GENAI_API_KEY = "AIzaSyCbcJlXb03XpGAEw82icxDU2-mFAAjG9go"
 genai.configure(api_key=GENAI_API_KEY)
 
+# Academic Citations Library (for Methods sections)
+CITATIONS = {
+    'scipy': """Virtanen, P., Gommers, R., Oliphant, T. E., Haberland, M., Reddy, T., Cournapeau, D., ... & van Mulbregt, P. (2020). SciPy 1.0: fundamental algorithms for scientific computing in Python. Nature methods, 17(3), 261-272.""",
+    'pingouin': """Vallat, R. (2018). Pingouin: statistics in Python. Journal of Open Source Software, 3(31), 1026.""",
+    'pandas': """McKinney, W. (2010). Data structures for statistical computing in python. In Proceedings of the 9th Python in Science Conference (Vol. 445, pp. 51-56).""",
+    'sklearn': """Pedregosa, F., Varoquaux, G., Gramfort, A., Michel, V., Thirion, B., Grisel, O., ... & Duchesnay, É. (2011). Scikit-learn: Machine learning in Python. Journal of machine learning research, 12(Oct), 2825-2830.""",
+    'numpy': """Harris, C. R., Millman, K. J., van der Walt, S. J., Gommers, R., Virtanen, P., Cournapeau, D., ... & Oliphant, T. E. (2020). Array programming with NumPy. Nature, 585(7825), 357-362."""
+}
+
+def generate_citation(test_name, libraries_used):
+    """Generate academic citation for Methods section."""
+    lib_map = {
+        'T-Test (Independent)': ['pingouin', 'scipy'],
+        'T-Test (Paired)': ['pingouin'],
+        'Chi-Square Test': ['pingouin'],
+        'ANOVA': ['pingouin'],
+        'Pearson Correlation': ['pingouin'],
+        'Machine Learning': ['sklearn', 'pandas'],
+        'Meta-Analysis': ['numpy', 'scipy']
+    }
+    
+    libs = libraries_used if libraries_used else lib_map.get(test_name, ['scipy'])
+    
+    citation_text = f"""**Methods Section Citation:**
+
+Statistical analysis was performed using Python programming language (version 3.11) with the following libraries: {', '.join(libs)}. """
+    
+    if test_name == 'T-Test (Independent)':
+        citation_text += """Independent samples t-test was used to compare continuous variables between two groups. """
+    elif test_name == 'T-Test (Paired)':
+        citation_text += """Paired samples t-test was used to compare related measurements. """
+    elif test_name == 'ANOVA':
+        citation_text += """One-way analysis of variance (ANOVA) was used to compare means across multiple groups. """
+    elif test_name == 'Chi-Square Test':
+        citation_text += """Chi-square test of independence was used to examine associations between categorical variables. """
+    elif test_name == 'Pearson Correlation':
+        citation_text += """Pearson correlation coefficient was calculated to assess linear relationships. """
+    
+    citation_text += """Statistical significance was set at α = 0.05.\n\n**References:**\n"""
+    
+    for lib in libs:
+        if lib in CITATIONS:
+            citation_text += f"- {CITATIONS[lib]}\n"
+    
+    return citation_text
+
+def validate_test_logic(test_name, col1_type, col2_type=None, col1_name="", col2_name=""):
+    """Use AI to validate if test is appropriate for data types."""
+    try:
+        data_summary = f"Column '{col1_name}' is {col1_type}"
+        if col2_type:
+            data_summary += f". Column '{col2_name}' is {col2_type}"
+        
+        prompt = f"""You are a biostatistics expert. Answer ONLY with YES or NO followed by one brief sentence.
+
+Test to run: {test_name}
+Data types: {data_summary}
+
+Question: Is this test statistically appropriate for these data types?
+Format: YES/NO - [one sentence reason]
+"""
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except:
+        return "YES - Unable to validate, proceeding with user selection."
+
+# Helper function for AI explanations
 def get_ai_explanation(test_name, result_df, p_value=None):
     """Generates and streams AI explanation for statistical results."""
     st.markdown("### 🤖 AI Explanation")
@@ -432,6 +501,19 @@ elif page == "Statistical Tests":
                 value_col = st.selectbox("Select Value Column (Numeric)", df.select_dtypes(include=np.number).columns)
                 
             if st.button("Run T-Test"):
+                # PRE-TEST VALIDATION
+                validation_result = validate_test_logic(
+                    "Independent T-Test", 
+                    "numeric",
+                    "categorical (2 groups)",
+                    value_col,
+                    group_col
+                )
+                
+                if "NO" in validation_result.upper():
+                    st.error(f"⚠️ **Methodology Warning:** {validation_result}")
+                    st.warning("This test may produce invalid results. Consider reviewing your data or choosing a different test.")
+                
                 try:
                     # Check if group column has exactly 2 unique values
                     unique_groups = df[group_col].unique()
@@ -453,6 +535,7 @@ elif page == "Statistical Tests":
                         else:
                             st.success("✅ Data appears normally distributed (Shapiro-Wilk p > 0.05). T-Test is appropriate.")
                         
+                        # CALCULATION (Deterministic - Using Pingouin library)
                         res = pg.ttest(group1, group2, correction=True)
                         st.dataframe(res, use_container_width=True)
                         
@@ -461,9 +544,36 @@ elif page == "Statistical Tests":
                             st.success(f"Significant difference found (p < 0.05). P-value: {p_val:.4f}")
                         else:
                             st.info(f"No significant difference found (p >= 0.05). P-value: {p_val:.4f}")
+                        
+                        # CODE TRANSPARENCY
+                        with st.expander("📋 View Calculation Code (For Academic Transparency)"):
+                            st.markdown("**Exact Python code used for this calculation:**")
+                            code_snippet = f"""import pingouin as pg
+import pandas as pd
+
+# Extract groups
+group1 = df[df['{group_col}'] == '{unique_groups[0]}']['{value_col}']
+group2 = df[df['{group_col}'] == '{unique_groups[1]}']['{value_col}']
+
+# Run Independent T-Test with Welch's correction
+result = pg.ttest(group1, group2, correction=True)
+
+# Result: 
+# T-statistic: {res['T'].values[0]:.4f}
+# p-value: {p_val:.4f}
+# Degrees of freedom: {res['dof'].values[0]:.2f}"""
+                            st.code(code_snippet, language='python')
+                            st.info("💡 This code uses the **Pingouin** library, which is peer-reviewed and cited in academic publications.")
                             
                         # AI Explanation
                         get_ai_explanation("Independent T-Test", res, p_val)
+                        
+                        # ACADEMIC CITATION
+                        st.markdown("---")
+                        st.markdown("### 📚 Methods Section Citation")
+                        citation = generate_citation("T-Test (Independent)", None)
+                        st.markdown(citation)
+                        st.info("💡 Copy the text above for your paper's Methods section. It references the peer-reviewed libraries, not this app.")
                         
                         # AI Report Writing
                         if st.button("📝 Generate APA Report"):
