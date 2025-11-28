@@ -671,6 +671,19 @@ result = pg.ttest(group1, group2, correction=True)
                 value_col = st.selectbox("Select Dependent Variable (Numeric)", df.select_dtypes(include=np.number).columns, key='anova_val')
                 
             if st.button("Run ANOVA"):
+                # PRE-TEST VALIDATION
+                validation_result = validate_test_logic(
+                    "One-way ANOVA",
+                    "numeric",
+                    "categorical (3+ groups)",
+                    value_col,
+                    group_col
+                )
+                
+                if "NO" in validation_result.upper():
+                    st.error(f"⚠️ **Methodology Warning:** {validation_result}")
+                    st.warning("This test may produce invalid results. Consider reviewing your data or choosing a different test.")
+                
                 try:
                     # Assumption Checks
                     st.markdown("#### 🔍 Assumption Checks")
@@ -683,13 +696,14 @@ result = pg.ttest(group1, group2, correction=True)
                     else:
                         st.success("✅ Variances are equal (Levene's p > 0.05).")
                         
-                    # 2. Normality (Shapiro-Wilk on residuals is standard, but per-group is easier here)
+                    # 2. Normality
                     norm = pg.normality(df, dv=value_col, group=group_col)
                     if any(norm['pval'] < 0.05):
                          st.warning("⚠️ Data may not be normally distributed in some groups. Consider Kruskal-Wallis.")
                     else:
                          st.success("✅ Data appears normally distributed.")
 
+                    # CALCULATION (Deterministic - Using Pingouin library)
                     res = pg.anova(data=df, dv=value_col, between=group_col)
                     st.dataframe(res, use_container_width=True)
                     
@@ -698,9 +712,32 @@ result = pg.ttest(group1, group2, correction=True)
                             st.success(f"Significant difference found (p < 0.05). P-value: {p_val:.4f}")
                     else:
                             st.info(f"No significant difference found (p >= 0.05). P-value: {p_val:.4f}")
+                    
+                    # CODE TRANSPARENCY
+                    with st.expander("📋 View Calculation Code (For Academic Transparency)"):
+                        st.markdown("**Exact Python code used for this calculation:**")
+                        code_snippet = f"""import pingouin as pg
+import pandas as pd
+
+# Run One-way ANOVA
+result = pg.anova(data=df, dv='{value_col}', between='{group_col}')
+
+# Result:
+# F-statistic: {res['F'].values[0]:.4f}
+# p-value: {p_val:.4f}
+# Degrees of freedom: {res['ddof1'].values[0]}, {res['ddof2'].values[0]}"""
+                        st.code(code_snippet, language='python')
+                        st.info("💡 This code uses the **Pingouin** library, which is peer-reviewed and cited in academic publications.")
                             
                     # AI Explanation
                     get_ai_explanation("ANOVA", res, p_val)
+                    
+                    # ACADEMIC CITATION
+                    st.markdown("---")
+                    st.markdown("### 📚 Methods Section Citation")
+                    citation = generate_citation("ANOVA", None)
+                    st.markdown(citation)
+                    st.info("💡 Copy the text above for your paper's Methods section. It references the peer-reviewed libraries, not this app.")
                     
                     # AI Report Writing
                     if st.button("📝 Generate APA Report"):
