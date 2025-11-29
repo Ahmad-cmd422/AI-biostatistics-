@@ -133,7 +133,9 @@ class LogicEngine:
     def compare_groups_automator(self, df, group_col, value_col):
         """
         NEJM-Level Group Comparison Automator.
-        Automatically selects between Welch's T-Test and Mann-Whitney U based on rigorous assumption checks.
+        Automatically selects between:
+        - 2 Groups: Welch's T-Test vs Mann-Whitney U
+        - 3+ Groups: One-way ANOVA vs Kruskal-Wallis
         """
         results = {}
         reasons = []
@@ -147,9 +149,40 @@ class LogicEngine:
         
         # Get groups
         groups = df[group_col].dropna().unique()
-        if len(groups) != 2:
-            return {"error": f"Grouping variable '{group_col}' must have exactly 2 levels (found {len(groups)}: {groups}). Use ANOVA for 3+ groups."}
+        n_groups = len(groups)
+        
+        if n_groups < 2:
+             return {"error": "Grouping variable must have at least 2 levels."}
+             
+        # === BRANCH: 3+ GROUPS (ANOVA/Kruskal) ===
+        if n_groups > 2:
+            # Use smart_anova logic but format as dict
+            res_df, test_name, reason, msgs = self.smart_anova(df, value_col, group_col)
             
+            # Extract p-value and effect size (eta-squared for ANOVA usually)
+            p_val = res_df['p-unc'].values[0]
+            
+            # Effect size for ANOVA (np2 = partial eta squared)
+            if 'np2' in res_df.columns:
+                eff_size = res_df['np2'].values[0]
+                eff_label = "Partial Eta-Squared"
+            else:
+                eff_size = 0.0 # Placeholder if not available
+                eff_label = "N/A"
+                
+            p_fmt = "<0.001" if p_val < 0.001 else f"{p_val:.3f}"
+            
+            return {
+                "Test Name": test_name,
+                "P-value": p_fmt,
+                "Numeric P": p_val,
+                "Effect Size": f"{eff_size:.2f} ({eff_label})",
+                "Logic Reason": reason,
+                "Detailed Reasons": [m['text'] for m in msgs],
+                "Raw Result": res_df
+            }
+
+        # === BRANCH: 2 GROUPS (T-Test/MWU) ===
         g1 = df[df[group_col] == groups[0]][value_col].dropna()
         g2 = df[df[group_col] == groups[1]][value_col].dropna()
         
