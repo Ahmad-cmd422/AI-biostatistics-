@@ -36,18 +36,19 @@ try:
 except ImportError:
     STATSMODELS_AVAILABLE = False
 
-# Configure Gemini API
-# HARDCODED FOR LOCAL TESTING
-GENAI_API_KEY = "AIzaSyDJs9abrEVimApsirEcVRlTchkmdSwSyg8"
-genai.configure(api_key=GENAI_API_KEY)
-
-
 # ROBUST MODEL LOADING (Fixes 404 Error)
 def get_generative_model():
     """
     Dynamically selects the best available Gemini model.
     Prioritizes 2.0/2.5 Flash variants, then 1.5 Flash, then Pro.
     """
+    # Configure Gemini API from secrets
+    if "GENAI_API_KEY" in st.secrets:
+        genai.configure(api_key=st.secrets["GENAI_API_KEY"])
+    else:
+        st.warning("⚠️ Gemini API key not found in secrets. AI features will be disabled.")
+        return None
+
     preferred_order = [
         'gemini-2.0-flash',
         'gemini-2.0-flash-exp',
