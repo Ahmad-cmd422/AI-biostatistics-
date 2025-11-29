@@ -302,9 +302,20 @@ class LogicEngine:
                     categorical.append(col)
                 else:
                     # Check normality for continuous vars
-                    stat, p = stats.shapiro(df[col].dropna())
-                    if p < 0.05:
-                        nonnormal.append(col)
+                    # OPTIMIZATION: Shapiro is slow/invalid for N > 5000. 
+                    v = df[col].dropna()
+                    if len(v) > 5000:
+                        # Use simple skewness heuristic for large data (faster)
+                        if abs(stats.skew(v)) > 1:
+                            nonnormal.append(col)
+                    else:
+                        # Use Shapiro-Wilk for smaller data
+                        try:
+                            stat, p = stats.shapiro(v)
+                            if p < 0.05:
+                                nonnormal.append(col)
+                        except:
+                            pass # Fallback if test fails
             else:
                 categorical.append(col)
         
