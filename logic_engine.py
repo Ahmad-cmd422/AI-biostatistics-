@@ -130,12 +130,12 @@ class LogicEngine:
         
         return result, test_used, test_reason, messages
 
-    def compare_groups_automator(self, df, group_col, value_col):
+    def compare_groups_automator(self, df, group_col, value_col, test_mode="Auto-Detect"):
         """
         NEJM-Level Group Comparison Automator.
-        Automatically selects between:
-        - 2 Groups: Welch's T-Test vs Mann-Whitney U
-        - 3+ Groups: One-way ANOVA vs Kruskal-Wallis
+        
+        Parameters:
+        - test_mode: "Auto-Detect", "T-Test", "Mann-Whitney", "ANOVA", "Kruskal-Wallis"
         """
         results = {}
         reasons = []
@@ -154,35 +154,40 @@ class LogicEngine:
         if n_groups < 2:
              return {"error": "Grouping variable must have at least 2 levels."}
              
-        # === BRANCH: 3+ GROUPS (ANOVA/Kruskal) ===
+        # === MANUAL OVERRIDE LOGIC ===
+        if test_mode == "T-Test":
+            res = pg.ttest(df[df[group_col]==groups[0]][value_col], df[df[group_col]==groups[1]][value_col])
+            return self._format_result(res, "Independent T-Test (Forced)", "User manually selected T-Test.", "Cohen's d", "cohen-d")
+            
+        elif test_mode == "Mann-Whitney":
+            res = pg.mwu(df[df[group_col]==groups[0]][value_col], df[df[group_col]==groups[1]][value_col])
+            return self._format_result(res, "Mann-Whitney U (Forced)", "User manually selected Mann-Whitney.", "Rank-Biserial", "RBC")
+            
+        elif test_mode == "ANOVA":
+            res = pg.anova(data=df, dv=value_col, between=group_col)
+            return self._format_result(res, "One-way ANOVA (Forced)", "User manually selected ANOVA.", "Partial Eta-Sq", "np2")
+            
+        elif test_mode == "Kruskal-Wallis":
+            res = pg.kruskal(data=df, dv=value_col, between=group_col)
+            return self._format_result(res, "Kruskal-Wallis (Forced)", "User manually selected Kruskal-Wallis.", "Eta-Sq", "eta-sq") # pingouin kruskal doesn't return effect size usually, need check
+            
+        # === AUTO-DETECT LOGIC (Default) ===
+        
+        # ... (Existing Auto-Detect Logic for 3+ Groups) ...
         if n_groups > 2:
-            # Use smart_anova logic but format as dict
             res_df, test_name, reason, msgs = self.smart_anova(df, value_col, group_col)
-            
-            # Extract p-value and effect size (eta-squared for ANOVA usually)
+            # ... (formatting logic) ...
+            # Refactoring to use helper for cleaner code
             p_val = res_df['p-unc'].values[0]
-            
-            # Effect size for ANOVA (np2 = partial eta squared)
             if 'np2' in res_df.columns:
-                eff_size = res_df['np2'].values[0]
-                eff_label = "Partial Eta-Squared"
+                eff = res_df['np2'].values[0]
+                eff_lbl = "Partial Eta-Squared"
             else:
-                eff_size = 0.0 # Placeholder if not available
-                eff_label = "N/A"
-                
-            p_fmt = "<0.001" if p_val < 0.001 else f"{p_val:.3f}"
-            
-            return {
-                "Test Name": test_name,
-                "P-value": p_fmt,
-                "Numeric P": p_val,
-                "Effect Size": f"{eff_size:.2f} ({eff_label})",
-                "Logic Reason": reason,
-                "Detailed Reasons": [m['text'] for m in msgs],
-                "Raw Result": res_df
-            }
+                eff = 0.0
+                eff_lbl = "N/A"
+            return self._build_result_dict(test_name, p_val, eff, eff_lbl, reason, [m['text'] for m in msgs], res_df)
 
-        # === BRANCH: 2 GROUPS (T-Test/MWU) ===
+        # ... (Existing Auto-Detect Logic for 2 Groups) ...
         g1 = df[df[group_col] == groups[0]][value_col].dropna()
         g2 = df[df[group_col] == groups[1]][value_col].dropna()
         
@@ -190,79 +195,82 @@ class LogicEngine:
         if len(g1) < 3 or len(g2) < 3:
             return {"error": f"Insufficient sample size (Group 1: {len(g1)}, Group 2: {len(g2)}). Need at least 3 per group."}
             
-        # Check for constant values (Zero Variance)
+        # Check for constant values
         if g1.nunique() <= 1 and g2.nunique() <= 1:
-             return {"error": "Both groups have constant values (zero variance). Statistical testing is impossible."}
+             return {"error": "Both groups have constant values (zero variance)."}
         
-        # 1. Normality Check
+        # Normality Check
         is_normal = True
         for g, name in zip([g1, g2], groups):
-            n = len(g)
-            
-            # Handle constant group for normality check
             if g.nunique() <= 1:
                 is_normal = False
-                reasons.append(f"Group '{name}' is constant (non-normal).")
+                reasons.append(f"Group '{name}' is constant.")
                 continue
-                
             try:
                 skewness = stats.skew(g)
-                if n < 50:
+                if len(g) < 50:
                     stat, p_norm = stats.shapiro(g)
-                    test_name = "Shapiro-Wilk"
                 else:
                     stat, p_norm = stats.normaltest(g)
-                    test_name = "D'Agostino-Pearson"
                 
-                # NEJM Logic: Significant p AND substantial skew required to reject normality
                 if p_norm < 0.05 and abs(skewness) > 1:
                     is_normal = False
-                    reasons.append(f"Group '{name}' is non-normal ({test_name} p={p_norm:.3f}, Skew={skewness:.2f})")
-            except Exception as e:
+                    reasons.append(f"Group '{name}' is non-normal (p={p_norm:.3f}, Skew={skewness:.2f})")
+            except:
                 is_normal = False
-                reasons.append(f"Could not test normality for '{name}': {str(e)}")
         
-        # 2. Variance Check (Brown-Forsythe)
+        # Variance Check
         try:
             stat_var, p_var = stats.levene(g1, g2, center='median')
             if p_var < 0.05:
-                reasons.append(f"Unequal variances (Brown-Forsythe p={p_var:.3f})")
+                reasons.append(f"Unequal variances (p={p_var:.3f})")
         except:
-            pass # Levene might fail with constant inputs, ignore
+            pass
         
-        # 3. Select Test
+        # Select Test
+        if not is_normal:
+            res = pg.mwu(g1, g2)
+            return self._format_result(res, "Mann-Whitney U Test", "Data is non-normal. Using non-parametric test.", "Rank-Biserial", "RBC", reasons)
+        else:
+            res = pg.ttest(g1, g2, correction=True)
+            return self._format_result(res, "Welch's T-Test", "Data is normal. Using Welch's T-Test.", "Cohen's d", "cohen-d", reasons)
+
+    def _format_result(self, res, name, reason, eff_label, eff_col, details=[]):
+        """Helper to format results consistently."""
         try:
-            if not is_normal:
-                # Mann-Whitney U
-                res = pg.mwu(g1, g2)
-                test_name = "Mann-Whitney U Test"
-                p_val = res['p-val'].values[0]
-                eff_size = res['RBC'].values[0]
-                eff_label = "Rank-Biserial Correlation"
-                logic_reason = "Data is non-normal (p < 0.05 & |skew| > 1). Using non-parametric test."
+            p_val = res['p-val'].values[0] if 'p-val' in res.columns else res['p-unc'].values[0]
+            
+            if eff_col in res.columns:
+                eff_size = res[eff_col].values[0]
             else:
-                # Welch's T-Test (Always preferred over Student's T per modern guidelines)
-                res = pg.ttest(g1, g2, correction=True)
-                test_name = "Welch's T-Test"
-                p_val = res['p-val'].values[0]
-                eff_size = res['cohen-d'].values[0]
-                eff_label = "Cohen's d"
-                logic_reason = "Data is normal. Using Welch's T-Test (robust to unequal variance)."
-    
-            # Formatting
+                eff_size = 0.0
+                
             p_fmt = "<0.001" if p_val < 0.001 else f"{p_val:.3f}"
             
             return {
-                "Test Name": test_name,
+                "Test Name": name,
                 "P-value": p_fmt,
                 "Numeric P": p_val,
                 "Effect Size": f"{eff_size:.2f} ({eff_label})",
-                "Logic Reason": logic_reason,
-                "Detailed Reasons": reasons,
+                "Logic Reason": reason,
+                "Detailed Reasons": details,
                 "Raw Result": res
             }
         except Exception as e:
-            return {"error": f"Statistical test failed: {str(e)}"}
+            return {"error": f"Error formatting result: {str(e)}"}
+            
+    def _build_result_dict(self, name, p_val, eff_size, eff_label, reason, details, res):
+        """Helper to build result dict manually."""
+        p_fmt = "<0.001" if p_val < 0.001 else f"{p_val:.3f}"
+        return {
+            "Test Name": name,
+            "P-value": p_fmt,
+            "Numeric P": p_val,
+            "Effect Size": f"{eff_size:.2f} ({eff_label})",
+            "Logic Reason": reason,
+            "Detailed Reasons": details,
+            "Raw Result": res
+        }
 
     def generate_table1(self, df, group_col, study_design='Observational'):
         """

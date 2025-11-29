@@ -475,6 +475,14 @@ elif page == "The Hypothesis":
             st.markdown("### 💡 AI Recommendation")
             st.markdown(f"**Test:** `{st.session_state['suggested_test']}`")
             st.markdown(f"**Rationale:** {st.session_state['test_reason']}")
+            
+        # Test Selection (Manual Override)
+        st.markdown("### ⚙️ Configuration")
+        test_mode = st.selectbox(
+            "Statistical Test Mode",
+            ["Auto-Detect (Recommended)", "T-Test", "Mann-Whitney", "ANOVA", "Kruskal-Wallis"],
+            help="Auto-Detect will check assumptions and choose the best test. You can override this to force a specific test."
+        )
         
         # Next/Previous buttons
         st.markdown("---")
@@ -488,6 +496,7 @@ elif page == "The Hypothesis":
                 # PERSIST SELECTION explicitly to prevent widget cleanup loss
                 st.session_state['confirmed_ind_var'] = independent_var
                 st.session_state['confirmed_dep_var'] = dependent_var
+                st.session_state['confirmed_test_mode'] = test_mode
                 
                 st.session_state.current_step = 4
                 st.rerun()
@@ -505,14 +514,17 @@ elif page == "The Analysis":
         if 'confirmed_ind_var' in st.session_state and 'confirmed_dep_var' in st.session_state:
             ind_var = st.session_state['confirmed_ind_var']
             dep_var = st.session_state['confirmed_dep_var']
+            test_mode = st.session_state.get('confirmed_test_mode', 'Auto-Detect')
             
             st.info(f"**Testing:** {ind_var} → {dep_var}")
+            st.caption(f"**Mode:** {test_mode}")
             
             # Run comparison if both are set
             if st.button("🚀 Run Analysis", type="primary"):
                 with st.spinner("Running analysis..."):
                     try:
-                        result = logic_engine.compare_groups_automator(df, ind_var, dep_var)
+                        # Pass test_mode to logic engine
+                        result = logic_engine.compare_groups_automator(df, ind_var, dep_var, test_mode=test_mode)
                         
                         if 'error' in result:
                             st.error(result['error'])
