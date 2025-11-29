@@ -438,15 +438,26 @@ elif page == "The Hypothesis":
     else:
         df = st.session_state['df']
         
-        # Variable selection
-        st.markdown("### 🎯 Select Variables")
+        st.subheader("🎯 Select Variables")
+        
+        # Smart Filtering: Exclude high-cardinality columns (likely IDs/Names) from Independent Var
+        # unless they are numeric (for regression)
+        low_cardinality_cols = [c for c in df.columns if df[c].nunique() < 20 or pd.api.types.is_numeric_dtype(df[c])]
         
         col1, col2 = st.columns(2)
         with col1:
-            independent_var = st.selectbox("Independent Variable (Predictor)", df.columns, key="ind_var")
+            independent_var = st.selectbox(
+                "Independent Variable (Predictor/Group)", 
+                options=low_cardinality_cols,
+                index=0 if len(low_cardinality_cols) > 0 else None,
+                help="Choose the variable that defines your groups (e.g., Treatment vs Control)"
+            )
         with col2:
-            dependent_var = st.selectbox("Dependent Variable (Outcome)", df.columns, key="dep_var")
-        
+            dependent_var = st.selectbox(
+                "Dependent Variable (Outcome)", 
+                options=df.columns,
+                index=1 if len(df.columns) > 1 else 0
+            )     
         # AI Test Suggestion
         if st.button("🤖 Suggest Statistical Test", use_container_width=True):
             if st.session_state.copilot:
