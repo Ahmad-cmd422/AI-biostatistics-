@@ -474,6 +474,10 @@ elif page == "The Hypothesis":
                 st.rerun()
         with col2:
             if st.button("➡️ Next: Run Analysis", type="primary"):
+                # PERSIST SELECTION explicitly to prevent widget cleanup loss
+                st.session_state['confirmed_ind_var'] = independent_var
+                st.session_state['confirmed_dep_var'] = dependent_var
+                
                 st.session_state.current_step = 4
                 st.rerun()
 
@@ -486,9 +490,10 @@ elif page == "The Analysis":
     else:
         df = st.session_state['df']
         
-        if 'ind_var' in st.session_state and 'dep_var' in st.session_state:
-            ind_var = st.session_state['ind_var']
-            dep_var = st.session_state['dep_var']
+        # Check for persistent variables first
+        if 'confirmed_ind_var' in st.session_state and 'confirmed_dep_var' in st.session_state:
+            ind_var = st.session_state['confirmed_ind_var']
+            dep_var = st.session_state['confirmed_dep_var']
             
             st.info(f"**Testing:** {ind_var} → {dep_var}")
             
@@ -534,23 +539,17 @@ Logic: {result['Logic Reason']}
 
 Provide a 2-3 sentence interpretation focusing on clinical significance."""
                     
-                    response = model.generate_content(prompt)
-                    st.info(response.text)
+                    if model:
+                        response = model.generate_content(prompt)
+                        st.info(response.text)
+                    else:
+                         st.warning("AI unavailable (check API key)")
                 except:
                     st.warning("AI interpretation unavailable")
         else:
             st.warning("Please define your hypothesis in Step 3 first")
-        
-        # Next/Previous buttons
-        st.markdown("---")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("⬅️ Back: Hypothesis"):
+            if st.button("⬅️ Go to Step 3"):
                 st.session_state.current_step = 3
-                st.rerun()
-        with col2:
-            if st.button("➡️ Next: Generate Manuscript", type="primary"):
-                st.session_state.current_step = 5
                 st.rerun()
 
 elif page == "The Manuscript":
