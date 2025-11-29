@@ -19,9 +19,9 @@ git push origin main
 4. Select your repository: `Rbiostatitics`
 5. Main file path: `app.py`
 6. Click "Advanced settings" → "Secrets"
-7. Paste this:
    ```toml
-   GENAI_API_KEY = "AIzaSyCbcJlXb03XpGAEw82icxDU2-mFAAjG9go"
+   # .streamlit/secrets.toml
+   GENAI_API_KEY = "YOUR_GEMINI_API_KEY_HERE"
    ```
 8. Click "Deploy!"
 
