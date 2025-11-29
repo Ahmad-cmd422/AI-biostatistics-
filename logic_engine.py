@@ -146,6 +146,13 @@ class LogicEngine:
             
         if group_col == value_col:
             return {"error": "Independent and Dependent variables cannot be the same."}
+            
+        # Check if Dependent Variable is numeric (Required for T-Test/ANOVA)
+        if not pd.api.types.is_numeric_dtype(df[value_col]):
+            # Check if they might have swapped them (Group is numeric, Value is categorical)
+            if pd.api.types.is_numeric_dtype(df[group_col]):
+                return {"error": f"Dependent Variable '{value_col}' is not numeric. Did you mean to swap them? (Try: Independent='{value_col}', Dependent='{group_col}')"}
+            return {"error": f"Dependent Variable '{value_col}' must be numeric for Group Comparisons (T-Test/ANOVA)."}
         
         # Get groups
         groups = df[group_col].dropna().unique()
