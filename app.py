@@ -7,11 +7,20 @@ import numpy as np
 import google.generativeai as genai
 import os
 import plotly.express as px
+from streamlit_option_menu import option_menu
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score, r2_score, confusion_matrix, classification_report
 import matplotlib.pyplot as plt
+
+# Import new engines
+from logic_engine import LogicEngine
+from viz_engine import VizEngine
+
+# Initialize Engines
+logic_engine = LogicEngine()
+viz_engine = VizEngine()
 
 # Optional imports for advanced features
 try:
@@ -27,15 +36,10 @@ try:
 except ImportError:
     STATSMODELS_AVAILABLE = False
 
-# Configure Gemini API (Secure for Cloud Deployment)
-# API key is stored in Streamlit secrets, not in code
-try:
-    GENAI_API_KEY = st.secrets["GENAI_API_KEY"]
-    genai.configure(api_key=GENAI_API_KEY)
-except:
-    # Fallback for local development without secrets
-    st.warning("⚠️ No API Key found. Please configure secrets in Streamlit Cloud or add .streamlit/secrets.toml locally.")
-    GENAI_API_KEY = None
+# Configure Gemini API
+# HARDCODED FOR LOCAL TESTING
+GENAI_API_KEY = "AIzaSyDJs9abrEVimApsirEcVRlTchkmdSwSyg8"
+genai.configure(api_key=GENAI_API_KEY)
 
 
 # ROBUST MODEL LOADING (Fixes 404 Error)
@@ -136,198 +140,479 @@ Format: YES/NO - [one sentence reason]
     except:
         return "YES - Unable to validate, proceeding with user selection."
 
-def detect_variable_type(column):
-    """Auto-detect variable type for smart data ingestion."""
-    # Check if column is numeric
-    if pd.api.types.is_numeric_dtype(column):
-        unique_count = column.nunique()
-        
-        # Check if it's likely an ID column
-        if column.name.lower() in ['id', 'patient_id', 'subject_id', 'record_id']:
-            return "ID (exclude from analysis)"
-        # Categorical if few unique values
-        elif unique_count < 10:
-            return "Categorical (numeric codes)"
-        # Possibly ordinal
-        elif unique_count < 30:
-            return "Ordinal (or Continuous)"
-        # Continuous
-        else:
-            return "Continuous"
-    # Non-numeric
-    else:
-        # Check if it's a date
-        if pd.api.types.is_datetime64_any_dtype(column):
-            return "Date (exclude or convert)"
-        # Text categorical
-        else:
-            return "Categorical (text)"
+        return "YES - Unable to validate, proceeding with user selection."
 
-def smart_ttest(group1, group2, group_names):
-    """Smart T-Test with automatic switching to Mann-Whitney if assumptions violated."""
-    # Check normality with Shapiro-Wilk
-    norm1 = pg.normality(group1)
-    norm2 = pg.normality(group2)
-    p_norm1 = norm1['pval'].values[0]
-    p_norm2 = norm2['pval'].values[0]
-    
-    # Auto-switch logic
-    if p_norm1 < 0.05 or p_norm2 < 0.05:
-        # DATA NOT NORMAL - AUTO-SWITCH
-        st.warning(f"🔄 **Auto-Switch Activated**: Data is not normally distributed (Shapiro-Wilk p < 0.05). Automatically switched from T-Test to **Mann-Whitney U Test** for accuracy.")
-        result = pg.mwu(group1, group2)
-        test_used = "Mann-Whitney U Test"
-        test_reason = "Non-parametric alternative used due to violated normality assumption"
-    else:
-        # DATA IS NORMAL - USE T-TEST
-        st.success("✅ Data is normally distributed (Shapiro-Wilk p > 0.05). Using **Independent T-Test**.")
-        result = pg.ttest(group1, group2, correction=True)
-        test_used = "Independent T-Test"
-        test_reason = "Parametric test appropriate for normally distributed data"
-    
-    return result, test_used, test_reason
-
-def smart_anova(df, dv, group_col):
-    """Smart ANOVA with automatic switching to Kruskal-Wallis if assumptions violated."""
-    # Check assumptions
-    # 1. Homogeneity of variance
-    levene = pg.homoscedasticity(df, dv=dv, group=group_col)
-    p_levene = levene['pval'].values[0]
-    
-    # 2. Normality per group
-    norm = pg.normality(df, dv=dv, group=group_col)
-    normality_violated = any(norm['pval'] < 0.05)
-    
-    # Auto-switch logic
-    if p_levene < 0.05 or normality_violated:
-        # ASSUMPTIONS VIOLATED - AUTO-SWITCH
-        reasons = []
-        if p_levene < 0.05:
-            reasons.append("unequal variances (Levene's p < 0.05)")
-        if normality_violated:
-            reasons.append("non-normal distribution (Shapiro-Wilk p < 0.05)")
-        
-        st.warning(f"🔄 **Auto-Switch Activated**: Data violates assumptions ({', '.join(reasons)}). Automatically switched from ANOVA to **Kruskal-Wallis Test** for accuracy.")
-        result = pg.kruskal(df, dv=dv, between=group_col)
-        test_used = "Kruskal-Wallis Test"
-        test_reason = f"Non-parametric alternative used due to: {', '.join(reasons)}"
-    else:
-        # ASSUMPTIONS MET - USE ANOVA
-        st.success("✅ Assumptions met (equal variances + normal distribution). Using **One-way ANOVA**.")
-        result = pg.anova(data=df, dv=dv, between=group_col)
-        test_used = "One-way ANOVA"
-        test_reason = "Parametric test appropriate for data meeting assumptions"
-    
-    return result, test_used, test_reason
+# detect_variable_type, smart_ttest, and smart_anova have been moved to logic_engine.py
 
 # Helper function for AI explanations
-def get_ai_explanation(test_name, result_df, p_value=None):
-    """Generates and streams AI explanation for statistical results."""
-    st.markdown("### 🤖 AI Explanation")
-    
-    prompt = f"""
-    You are a biostatistics expert. Explain this {test_name} result to a medical student in plain English.
-    
-    Key Data:
-    - Test: {test_name}
-    - P-value: {p_value if p_value is not None else 'N/A'}
-    - Full Result: 
-    {result_df.to_string()}
-    
-    Please provide a concise explanation covering:
-    1. Is the result statistically significant?
-    2. What does this mean in practical terms?
-    3. If applicable, what does the confidence interval imply?
+def get_ai_explanation(test_name, result_df, p_value=None, logic_reason=None, effect_size=None, ci=None):
     """
+    Get AI interpretation with strict NEJM-level standards.
+    """
+    st.markdown("### 🤖 AI Interpretation")
     
-    try:
-        model = get_generative_model()
-        response = model.generate_content(prompt, stream=True)
-        
-        def stream_generator():
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
-                    
-        st.write_stream(stream_generator())
-        
-    except Exception as e:
-        st.error(f"AI Error: {str(e)}")
+    with st.spinner("Consulting senior biostatistician..."):
+        try:
+            # Build context from logic
+            logic_context = f"\n\nTest Selection Logic: {logic_reason}" if logic_reason else ""
+            effect_context = f"\n\nEffect Size: {effect_size}" if effect_size else ""
+            ci_context = f"\n\nConfidence Interval: {ci}" if ci else ""
+            
+            # STRICT NEJM PROMPT
+            prompt = f"""You are a senior biostatistician reviewing a manuscript submission for the New England Journal of Medicine (NEJM).
+
+Your task is to interpret the following statistical result with EXTREME rigor:
+
+Test: {test_name}
+P-value: {p_value if p_value else 'See result table'}
+{logic_context}{effect_context}{ci_context}
+
+Result Table:
+{result_df.to_string()}
+
+CRITICAL INSTRUCTIONS:
+1. NEVER use the phrase "trend toward significance" or "approaching significance". If p ≥ 0.05, state clearly: "No statistically significant difference was observed."
+2. ALWAYS cite the Effect Size first, then the Confidence Interval, and only then mention the p-value.
+3. If the Confidence Interval is wide (e.g., crosses the null value or spans a large range), explicitly state: "The estimate is imprecise due to a wide confidence interval."
+4. Interpret CLINICAL relevance, not just statistical significance. Ask: "Does this effect size matter to patients?"
+5. If the logic reason indicates auto-switching (e.g., from T-Test to Mann-Whitney), acknowledge this and explain why it strengthens the validity of the result.
+6. Keep your response to 3-4 sentences maximum. Be precise, not verbose.
+
+Write your interpretation now:"""
+            
+            model = get_generative_model()
+            response = model.generate_content(prompt)
+            
+            st.info(response.text)
+            
+        except Exception as e:
+            st.error(f"Error generating AI interpretation: {str(e)}")
 
 # Page configuration
 st.set_page_config(
-    page_title="Rbiostatitics",
-    page_icon="📊",
+    page_title="Rbiostatistics - AI Research Copilot",
+    page_icon="🧬",
     layout="wide"
 )
 
 # Robust Data Loading Function
 def load_data():
-    """Ensures data is loaded from session state or local file."""
+    """Ensures data is loaded from session state."""
     if 'df' in st.session_state:
         return st.session_state['df']
-    
-    local_path = "/Users/ahmadtarek/Downloads/healthcare_dataset.csv"
-    if os.path.exists(local_path):
-        try:
-            df = pd.read_csv(local_path)
-            # Clean data immediately
-            for col in df.select_dtypes(include=['object']).columns:
-                try:
-                    df[col] = df[col].astype(str).str.title().str.strip()
-                except:
-                    pass
-            for col in df.columns:
-                if 'date' in col.lower() or 'time' in col.lower() or 'admission' in col.lower() or 'discharge' in col.lower():
-                    try:
-                        df[col] = pd.to_datetime(df[col], errors='coerce')
-                    except:
-                        pass
-            
-            # Feature Engineering
-            adm_col = next((c for c in df.columns if 'admission' in c.lower() and 'date' in c.lower()), None)
-            dis_col = next((c for c in df.columns if 'discharge' in c.lower() and 'date' in c.lower()), None)
-            if adm_col and dis_col:
-                df['Length of Stay'] = (df[dis_col] - df[adm_col]).dt.days
-            
-            st.session_state['df'] = df
-            st.session_state['filename'] = "healthcare_dataset.csv"
-            return df
-        except Exception as e:
-            st.error(f"Auto-load failed: {e}")
-            return None
     return None
+
+# Initialize session state for workflow
+if 'current_step' not in st.session_state:
+    st.session_state.current_step = 1
+if 'copilot' not in st.session_state:
+    st.session_state.copilot = None
 
 # Load data at startup
 df = load_data()
 
-# Sidebar for navigation
-st.sidebar.title("📊 Rbiostatitics")
-st.sidebar.markdown("---")
-st.sidebar.header("Navigation")
-page = st.sidebar.radio(
-    "Select a page:",
-    ["Home", "Data Upload", "Variable Setup", "Research Question", "Table 1", "Statistical Wizard", "Statistical Tests", "Meta-Analysis", "Visualization", "Machine Learning", "AI Chatbot"]
-)
-st.sidebar.markdown("---")
-st.sidebar.info("Upload your data files (.csv or .xlsx) to get started!")
+# Initialize Research Copilot
+from logic_engine import ResearchCopilot
+if df is not None and st.session_state.copilot is None:
+    try:
+        model = get_generative_model()
+        st.session_state.copilot = ResearchCopilot(df=df, gemini_model=model)
+    except:
+        st.session_state.copilot = ResearchCopilot(df=df, gemini_model=None)
+
+# Workflow Steps Definition
+WORKFLOW_STEPS = {
+    1: {"name": "Ingest & Inspect", "icon": "📥"},
+    2: {"name": "Clean & Prepare", "icon": "🧹"},
+    3: {"name": "The Hypothesis", "icon": "🔬"},
+    4: {"name": "The Analysis", "icon": "📊"},
+    5: {"name": "The Manuscript", "icon": "📝"}
+}
+
+# Sidebar Navigation with Wizard + Research Assistant
+with st.sidebar:
+    st.title("🧬 Rbiostatistics")
+    st.markdown("### AI Research Copilot")
+    st.markdown("---")
+    
+    # Wizard Navigation
+    st.markdown("#### 🗺️ Research Workflow")
+    
+    # Create step menu
+    step_options = [f"{WORKFLOW_STEPS[i]['icon']} {i}. {WORKFLOW_STEPS[i]['name']}" for i in range(1, 6)]
+    
+    selected_step = option_menu(
+        menu_title=None,
+        options=step_options,
+        icons=["1-circle", "2-circle", "3-circle", "4-circle", "5-circle"],
+        menu_icon="cast",
+        default_index=st.session_state.current_step - 1,
+        styles={
+            "container": {"padding": "0!important", "background-color": "#fafafa"},
+            "icon": {"color": "#2E86C1", "font-size": "14px"}, 
+            "nav-link": {
+                "font-size": "13px",
+                "text-align": "left",
+                "margin":"2px",
+                "--hover-color": "#eee"
+            },
+            "nav-link-selected": {"background-color": "#2E86C1"},
+        }
+    )
+    
+    # Update current step based on selection
+    step_number = int(selected_step.split('.')[0].split()[-1])
+    
+    # GUARDRAIL: Prevent skipping steps if no data loaded
+    if step_number > 1 and 'df' not in st.session_state:
+        st.warning("⚠️ Please upload data in Step 1 first!")
+        st.session_state.current_step = 1
+    else:
+        st.session_state.current_step = step_number
+        
+    # Clear Data Button (For Testing/Resetting)
+    if 'df' in st.session_state:
+        st.markdown("---")
+        if st.button("🗑️ Clear Data & Restart", use_container_width=True):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.session_state.current_step = 1
+            st.rerun()
+    
+    st.markdown("---")
+    
+    # Research Assistant Section
+    st.markdown("#### 🤖 Research Assistant")
+    
+    if df is None:
+        st.info("💤 Waiting for data... I will analyze your variables once you upload.")
+    elif st.session_state.copilot and st.session_state.current_step == 1:
+        st.success("✅ Data loaded! Analyzing your dataset...")
+        
+        if st.button("🔮 Suggest Research Questions", use_container_width=True):
+            with st.spinner("Consulting AI biostatistician..."):
+                suggestions = st.session_state.copilot.get_research_suggestions()
+                st.session_state['ai_suggestions'] = suggestions
+        
+        # Display suggestions if available
+        if 'ai_suggestions' in st.session_state:
+            st.markdown("**💡 Suggested Questions:**")
+            for i, sug in enumerate(st.session_state['ai_suggestions'][:3], 1):
+                with st.expander(f"Q{i}: {sug['question'][:50]}...", expanded=False):
+                    st.write(sug['question'])
+                    st.caption(f"**Test:** {sug['suggested_test']}")
+    else:
+        st.info(f"📍 Step {st.session_state.current_step}: {WORKFLOW_STEPS[st.session_state.current_step]['name']}")
+
+# Map step number to page name
+page = WORKFLOW_STEPS[st.session_state.current_step]['name']
 
 # Main content
-if page == "Home":
-    st.title("Welcome to Rbiostatitics 📊")
-    st.markdown("""
-    ### A Streamlit Application for Biostatistical Analysis
+# Main content based on wizard step
+if page == "Ingest & Inspect":
+    st.title("📥 Step 1: Ingest & Inspect Data")
+    st.markdown("Upload your research data and preview the structure")
     
-    This application allows you to:
-    - 📁 Upload CSV and Excel files
-    - 👀 Preview your data
-    - 📋 View data summaries
-    - 🔍 Analyze data quality
+    # File uploader
+    uploaded_file = st.file_uploader(
+        "Choose a CSV or Excel file",
+        type=["csv", "xlsx"],
+        help="Upload a .csv or .xlsx file containing your data"
+    )
     
-    **Get started by navigating to the 'Data Upload' page using the sidebar!**
-    """)
+    if uploaded_file:
+        try:
+            if uploaded_file.name.endswith('.csv'):
+                df = pd.read_csv(uploaded_file)
+            else:
+                df = pd.read_excel(uploaded_file)
+            
+            st.session_state['df'] = df
+            st.success(f"✅ Loaded {len(df)} rows and {len(df.columns)} columns")
+            
+            # Preview
+            st.markdown("### 📊 Data Preview")
+            st.dataframe(df.head(10), use_container_width=True)
+            
+            # Basic stats
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Rows", len(df))
+            with col2:
+                st.metric("Columns", len(df.columns))
+            with col3:
+                missing = df.isnull().sum().sum()
+                st.metric("Missing Values", missing)
+            
+            # Reinitialize copilot with new data
+            try:
+                model = get_generative_model()
+                st.session_state.copilot = ResearchCopilot(df=df, gemini_model=model)
+            except:
+                st.session_state.copilot = ResarchCopilot(df=df, gemini_model=None)
+            
+        except Exception as e:
+            st.error(f"Error loading file: {str(e)}")
+    elif 'df' in st.session_state:
+        df = st.session_state['df']
+        st.info("Using previously loaded data")
+        st.dataframe(df.head(10), use_container_width=True)
+    else:
+        st.warning("Please upload a dataset to begin")
+    
+    # Next button
+    st.markdown("---")
+    if st.button("➡️ Next: Clean & Prepare Data", type="primary", use_container_width=True):
+        if 'df' in st.session_state:
+            st.session_state.current_step = 2
+            st.rerun()
+        else:
+            st.error("Please upload data first!")
 
-elif page == "Data Upload":
+elif page == "Clean & Prepare":
+    st.title("🧹 Step 2: Clean & Prepare Data")
+    st.markdown("Handle missing data and prepare variables for analysis")
+    
+    if 'df' not in st.session_state:
+        st.warning("⚠️ No data loaded. Please go back to Step 1.")
+        if st.button("⬅️ Back to Step 1"):
+            st.session_state.current_step = 1
+            st.rerun()
+    else:
+        df = st.session_state['df']
+        
+        # Missing data analysis
+        st.markdown("### 🔍 Missing Data Analysis")
+        missing_data = df.isnull().sum()
+        missing_pct = (missing_data / len(df) * 100).round(2)
+        missing_df = pd.DataFrame({
+            'Column': missing_data.index,
+            'Missing Count': missing_data.values,
+            'Missing %': missing_pct.values
+        }).query('`Missing Count` > 0')
+        
+        if len(missing_df) > 0:
+            st.dataframe(missing_df, use_container_width=True)
+            
+            st.markdown("### 🛠️ Imputation Options")
+            st.info("For now, you can drop rows with missing values. Advanced imputation coming soon!")
+            
+            if st.button("Drop Rows with Missing Values"):
+                df_clean = df.dropna()
+                st.session_state['df'] = df_clean
+                st.success(f"✅ Dropped {len(df) - len(df_clean)} rows. New dataset has {len(df_clean)} rows.")
+                st.rerun()
+        else:
+            st.success("✅ No missing data detected!")
+        
+        # Variable type confirmation
+        st.markdown("### 📋 Variable Types")
+        st.markdown("Review auto-detected variable types (you can adjust in next step)")
+        
+        type_data = []
+        for col in df.columns[:10]:
+            vtype = logic_engine.detect_variable_type(df[col])
+            type_data.append({"Variable": col, "Type": vtype, "Unique Values": df[col].nunique()})
+        
+        st.dataframe(pd.DataFrame(type_data), use_container_width=True)
+        
+        # Next/Previous buttons
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("⬅️ Back: Ingest Data"):
+                st.session_state.current_step = 1
+                st.rerun()
+        with col2:
+            if st.button("➡️ Next: Define Hypothesis", type="primary"):
+                st.session_state.current_step = 3
+                st.rerun()
+
+elif page == "The Hypothesis":
+    st.title("🔬 Step 3: Define Your Hypothesis")
+    st.markdown("Select variables and let AI suggest the appropriate statistical test")
+    
+    if 'df' not in st.session_state:
+        st.warning("⚠️ No data loaded. Please go back to Step 1.")
+    else:
+        df = st.session_state['df']
+        
+        # Variable selection
+        st.markdown("### 🎯 Select Variables")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            independent_var = st.selectbox("Independent Variable (Predictor)", df.columns, key="ind_var")
+        with col2:
+            dependent_var = st.selectbox("Dependent Variable (Outcome)", df.columns, key="dep_var")
+        
+        # AI Test Suggestion
+        if st.button("🤖 Suggest Statistical Test", use_container_width=True):
+            if st.session_state.copilot:
+                test_name, reason = st.session_state.copilot.suggest_test(independent_var, dependent_var, df)
+                st.session_state['suggested_test'] = test_name
+                st.session_state['test_reason'] = reason
+                
+                st.success(f"**Suggested Test:** {test_name}")
+                st.info(f"**Reason:** {reason}")
+            else:
+                st.warning("AI assistant not available")
+        
+        # Display suggestion if available
+        if 'suggested_test' in st.session_state:
+            st.markdown("### 💡 AI Recommendation")
+            st.markdown(f"**Test:** `{st.session_state['suggested_test']}`")
+            st.markdown(f"**Rationale:** {st.session_state['test_reason']}")
+        
+        # Next/Previous buttons
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("⬅️ Back: Clean Data"):
+                st.session_state.current_step = 2
+                st.rerun()
+        with col2:
+            if st.button("➡️ Next: Run Analysis", type="primary"):
+                st.session_state.current_step = 4
+                st.rerun()
+
+elif page == "The Analysis":
+    st.title("📊 Step 4: Run Statistical Analysis")
+    st.markdown("Execute the test and visualize results")
+    
+    if 'df' not in st.session_state:
+        st.warning("⚠️ No data loaded. Please go back to Step 1.")
+    else:
+        df = st.session_state['df']
+        
+        if 'ind_var' in st.session_state and 'dep_var' in st.session_state:
+            ind_var = st.session_state['ind_var']
+            dep_var = st.session_state['dep_var']
+            
+            st.info(f"**Testing:** {ind_var} → {dep_var}")
+            
+            # Run comparison if both are set
+            if st.button("🚀 Run Analysis", type="primary"):
+                with st.spinner("Running analysis..."):
+                    try:
+                        result = logic_engine.compare_groups_automator(df, ind_var, dep_var)
+                        
+                        if 'error' in result:
+                            st.error(result['error'])
+                        else:
+                            st.session_state['analysis_result'] = result
+                            st.success("✅ Analysis complete!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Analysis error: {str(e)}")
+            
+            # Display results if available
+            if 'analysis_result' in st.session_state:
+                result = st.session_state['analysis_result']
+                
+                st.markdown("### 📈 Results")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Test Used", result['Test Name'])
+                with col2:
+                    st.metric("P-value", result['P-value'])
+                with col3:
+                    st.metric("Effect Size", result['Effect Size'].split('(')[0].strip())
+                
+                st.markdown(f"**Logic:** {result['Logic Reason']}")
+                
+                # AI Interpretation
+                st.markdown("### 🤖 AI Interpretation")
+                try:
+                    model = get_generative_model()
+                    prompt = f"""Interpret this statistical result for a medical student:
+Test: {result['Test Name']}
+P-value: {result['P-value']}
+Effect Size: {result['Effect Size']}
+Logic: {result['Logic Reason']}
+
+Provide a 2-3 sentence interpretation focusing on clinical significance."""
+                    
+                    response = model.generate_content(prompt)
+                    st.info(response.text)
+                except:
+                    st.warning("AI interpretation unavailable")
+        else:
+            st.warning("Please define your hypothesis in Step 3 first")
+        
+        # Next/Previous buttons
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("⬅️ Back: Hypothesis"):
+                st.session_state.current_step = 3
+                st.rerun()
+        with col2:
+            if st.button("➡️ Next: Generate Manuscript", type="primary"):
+                st.session_state.current_step = 5
+                st.rerun()
+
+elif page == "The Manuscript":
+    st.title("📝 Step 5: Generate Manuscript Sections")
+    st.markdown("Create Table 1 and Methods section for publication")
+    
+    if 'df' not in st.session_state:
+        st.warning("⚠️ No data loaded. Please complete the workflow from Step 1.")
+    else:
+        df = st.session_state['df']
+        
+        # Table 1 Generator
+        st.markdown("### 📊 Table 1 Generator")
+        
+        study_design = st.radio("Study Design", ["Observational", "RCT"], horizontal=True)
+        group_col = st.selectbox("Grouping Variable (e.g., Treatment)", df.columns)
+        
+        if st.button("Generate Table 1"):
+            try:
+                table1 = logic_engine.generate_table1(df, group_col, study_design)
+                st.session_state['table1'] = table1
+                st.text(str(table1))
+                st.success("✅ Table 1 generated!")
+            except Exception as e:
+                st.error(f"Error: {str(e)}")
+        
+        # Methods Section
+        st.markdown("### 📖 Methods Section")
+        if 'analysis_result' in st.session_state:
+            result = st.session_state['analysis_result']
+            
+            methods_text = f"""
+**Statistical Analysis**
+
+Continuous variables were assessed for normality using the Shapiro-Wilk test. 
+{result['Logic Reason']} The {result['Test Name']} was used to compare groups.
+Effect sizes are reported as {result['Effect Size'].split('(')[1].strip(')')} 
+with 95% confidence intervals. Statistical significance was set at p < 0.05.
+All analyses were performed using Python (version 3.11) with the Pingouin library.
+"""
+            
+            st.code(methods_text.strip(), language=None)
+            
+            if st.button("📋 Copy Methods Section"):
+                st.success("Methods section ready to copy!")
+        else:
+            st.info("Complete Step 4 (Analysis) to generate methods section")
+        
+        # Restart button
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("⬅️ Back: Analysis"):
+                st.session_state.current_step = 4
+                st.rerun()
+        with col2:
+            if st.button("🔄 Start New Analysis", type="primary"):
+                # Clear session state
+                for key in list(st.session_state.keys()):
+                    if key not in ['current_step']:
+                        del st.session_state[key]
+                st.session_state.current_step = 1
+                st.rerun()
     st.title("📁 Data Upload")
     st.markdown("Upload your dataset to begin analysis")
     
@@ -482,7 +767,7 @@ elif page == "Variable Setup":
         # Create detection table
         detection_data = []
         for col in df.columns:
-            auto_type = detect_variable_type(df[col])
+            auto_type = logic_engine.detect_variable_type(df[col])
             detection_data.append({
                 'Variable Name': col,
                 'Auto-Detected Type': auto_type,
@@ -504,7 +789,7 @@ elif page == "Variable Setup":
             with st.expander(f"📊 {col}", expanded=False):
                 col1, col2, col3 = st.columns(3)
                 
-                auto_type = detect_variable_type(df[col])
+                auto_type = logic_engine.detect_variable_type(df[col])
                 
                 with col1:
                     confirmed_type = st.selectbox(
@@ -810,20 +1095,42 @@ elif page == "Statistical Tests":
                         group1 = df[df[group_col] == unique_groups[0]][value_col]
                         group2 = df[df[group_col] == unique_groups[1]][value_col]
                         
-                        # USE SMART T-TEST (Auto-switching)
-                        st.markdown("#### 🔍 Assumption Checks & Auto-Selection")
-                        res, test_used, test_reason = smart_ttest(group1, group2, unique_groups)
+                        # USE NEJM-LEVEL AUTOMATOR
+                        st.markdown("#### 🔍 NEJM-Level Assumption Checks & Auto-Selection")
                         
-                        # RESULTS DISPLAY (Enhanced)
-                        st.markdown("---")
-                        st.markdown("### 📊 RESULTS")
-                        st.markdown(f"**Test Used:** {test_used}")
-                        st.markdown(f"**Reason:** {test_reason}")
+                        automator_result = logic_engine.compare_groups_automator(df, group_col, value_col)
                         
-                        st.dataframe(res, use_container_width=True)
+                        if "error" in automator_result:
+                            st.error(automator_result["error"])
+                        else:
+                            # Display Reasons
+                            if automator_result["Detailed Reasons"]:
+                                for reason in automator_result["Detailed Reasons"]:
+                                    st.warning(f"⚠️ {reason}")
+                            else:
+                                st.success("✅ Data meets all parametric assumptions (Normality & Variance).")
+                            
+                            st.info(f"👉 **Decision:** {automator_result['Logic Reason']}")
+
+                            # RESULTS DISPLAY (Enhanced)
+                            st.markdown("---")
+                            st.markdown("### 📊 RESULTS")
+                            
+                            col_res1, col_res2, col_res3 = st.columns(3)
+                            col_res1.metric("Test Used", automator_result["Test Name"])
+                            col_res2.metric("P-Value", automator_result["P-value"])
+                            col_res3.metric("Effect Size", automator_result["Effect Size"])
+                            
+                            st.dataframe(automator_result["Raw Result"], use_container_width=True)
+                            
+                            # Prepare variables for downstream (AI explanation etc)
+                            test_used = automator_result["Test Name"]
+                            res = automator_result["Raw Result"]
+                            p_val = automator_result["Numeric P"]
+                        
                         
                         # BOLD P-VALUE DISPLAY
-                        p_val = res['p-val'].values[0] if 'p-val' in res.columns else res['p-unc'].values[0]
+                        # p_val is already extracted above from automator_result
                         st.markdown("### 🎯 Key Result")
                         st.markdown(f"# **p-value: {p_val:.4f}**")
                         
@@ -871,8 +1178,14 @@ result = pg.ttest(group1, group2, correction=True)
                         
                         st.markdown("---")
                         
-                        # AI INTERPRETATION (Separate Section)
-                        get_ai_explanation(test_used, res, p_val)
+                        # AI INTERPRETATION (Enhanced with NEJM logic)
+                        get_ai_explanation(
+                            test_used, 
+                            res, 
+                            p_val,
+                            logic_reason=automator_result['Logic Reason'],
+                            effect_size=automator_result['Effect Size']
+                        )
                         
                         st.markdown("---")
                         
@@ -1001,7 +1314,14 @@ Statistical analysis was performed using Python programming language (version 3.
                 try:
                     # USE SMART ANOVA (Auto-switching)
                     st.markdown("#### 🔍 Assumption Checks & Auto-Selection")
-                    res, test_used, test_reason = smart_anova(df, value_col, group_col)
+                    res, test_used, test_reason, messages = logic_engine.smart_anova(df, value_col, group_col)
+                    
+                    # Display messages from LogicEngine
+                    for msg in messages:
+                        if msg['type'] == 'warning':
+                            st.warning(msg['text'])
+                        elif msg['type'] == 'success':
+                            st.success(msg['text'])
                     
                     # RESULTS DISPLAY (Enhanced)
                     st.markdown("---")
@@ -1178,27 +1498,11 @@ elif page == "Meta-Analysis":
             st.success(f"✅ Pooled Odds Ratio: {pooled_or:.2f} [{pooled_lo:.2f}, {pooled_up:.2f}]")
             st.info(f"Heterogeneity: I² = {i2:.1f}%")
             
-            # Forest Plot using Matplotlib
-            fig, ax = plt.subplots(figsize=(8, len(edited_df) * 1))
-            
-            # Studies
-            y_pos = np.arange(len(edited_df))
-            ax.errorbar(edited_df['OR'], y_pos, xerr=[edited_df['OR'] - edited_df['Lower CI'], edited_df['Upper CI'] - edited_df['OR']], 
-                        fmt='o', color='black', ecolor='black', capsize=5, label='Studies')
-            
-            # Pooled
-            ax.errorbar(pooled_or, -1, xerr=[[pooled_or - pooled_lo], [pooled_up - pooled_or]], 
-                        fmt='D', color='red', ecolor='red', capsize=5, label='Pooled')
-            
-            # Labels
-            ax.set_yticks(np.append(y_pos, -1))
-            ax.set_yticklabels(list(edited_df['Study Name']) + ['Pooled'])
-            ax.set_xlabel("Odds Ratio (log scale)")
-            ax.set_xscale('log')
-            ax.axvline(x=1, color='gray', linestyle='--')
-            ax.set_title("Forest Plot")
-            
+            # Forest Plot using VizEngine
+            fig = viz_engine.create_forest_plot(edited_df, pooled_or, pooled_lo, pooled_up)
             st.pyplot(fig)
+            
+            st.text_area("Methods Citation", generate_citation("Meta-Analysis", ['numpy', 'matplotlib']), height=150)
             
         except Exception as e:
             st.error(f"Error running meta-analysis: {str(e)}")
@@ -1234,7 +1538,7 @@ elif page == "Visualization":
                 
             if st.button("Generate Boxplot"):
                 try:
-                    fig = px.box(df, x=x_col, y=y_col, color=color_col, title=f"Boxplot of {y_col} by {x_col}")
+                    fig = viz_engine.create_box_plot(df, x=x_col, y=y_col, color=color_col, title=f"Boxplot of {y_col} by {x_col}")
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
                     st.error(f"Error creating plot: {str(e)}")
@@ -1254,7 +1558,7 @@ elif page == "Visualization":
                 
             if st.button("Generate Scatter Plot"):
                 try:
-                    fig = px.scatter(df, x=x_col, y=y_col, color=color_col, title=f"Scatter Plot: {y_col} vs {x_col}", hover_data=df.columns)
+                    fig = viz_engine.create_scatter_plot(df, x=x_col, y=y_col, color=color_col, title=f"Scatter Plot: {y_col} vs {x_col}", hover_data=df.columns)
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
                     st.error(f"Error creating plot: {str(e)}")
@@ -1270,11 +1574,8 @@ elif page == "Visualization":
                         st.error("No numeric columns found for correlation.")
                     else:
                         corr_matrix = numeric_df.corr()
-                        fig = px.imshow(
+                        fig = viz_engine.create_heatmap(
                             corr_matrix, 
-                            text_auto=True, 
-                            aspect="auto",
-                            color_continuous_scale='RdBu_r',
                             title="Correlation Matrix Heatmap"
                         )
                         st.plotly_chart(fig, use_container_width=True)
