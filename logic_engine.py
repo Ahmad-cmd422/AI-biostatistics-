@@ -36,11 +36,27 @@ class LogicEngine:
 
     def check_normality(self, data):
         """
-        Performs Shapiro-Wilk test for normality.
+        Performs normality test.
+        - For N <= 5000: Shapiro-Wilk test
+        - For N > 5000: Skewness heuristic (|skew| > 1 = non-normal)
         Returns (is_normal: bool, p_value: float)
         """
-        stat, p = shapiro(data)
-        return p > 0.05, p
+        import numpy as np
+        from scipy import stats as sp_stats
+        
+        # Drop NAs and check size
+        clean_data = np.array([x for x in data if not (isinstance(x, float) and np.isnan(x))])
+        n = len(clean_data)
+        
+        if n > 5000:
+            # Use fast skewness heuristic for large data
+            skew_val = sp_stats.skew(clean_data)
+            is_normal = abs(skew_val) <= 1
+            return is_normal, 0.05 if is_normal else 0.01  # Dummy p-value
+        else:
+            # Use Shapiro-Wilk for smaller data
+            stat, p = shapiro(clean_data)
+            return p > 0.05, p
 
     def check_homogeneity(self, data, group_col, value_col):
         """
@@ -215,14 +231,23 @@ class LogicEngine:
                 continue
             try:
                 skewness = stats.skew(g)
-                if len(g) < 50:
+                n = len(g)
+                
+                if n > 5000:
+                    # Skip shapiro for very large groups, use skewness
+                    if abs(skewness) > 1:
+                        is_normal = False
+                        reasons.append(f"Group '{name}' is non-normal (N={n}, Skew={skewness:.2f})")
+                elif n < 50:
                     stat, p_norm = stats.shapiro(g)
+                    if p_norm < 0.05 and abs(skewness) > 1:
+                        is_normal = False
+                        reasons.append(f"Group '{name}' is non-normal (p={p_norm:.3f}, Skew={skewness:.2f})")
                 else:
                     stat, p_norm = stats.normaltest(g)
-                
-                if p_norm < 0.05 and abs(skewness) > 1:
-                    is_normal = False
-                    reasons.append(f"Group '{name}' is non-normal (p={p_norm:.3f}, Skew={skewness:.2f})")
+                    if p_norm < 0.05 and abs(skewness) > 1:
+                        is_normal = False
+                        reasons.append(f"Group '{name}' is non-normal (p={p_norm:.3f}, Skew={skewness:.2f})")
             except:
                 is_normal = False
         
